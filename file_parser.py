@@ -1,40 +1,175 @@
-from typing import Any
 from pathlib import Path
+from typing import Any
+from pydantic import BaseModel, Field, ValidationError, model_validator
+
+class FileParserError(Exception):
+    pass
+
+class FileParser:
+    @staticmethod
+    def _get_zone(value: str) -> str:
+        parts = value.split()
+        return parts[0]
+
+    @staticmethod
+    def _get_connections(value: str) -> tuple[str, str]:
+        parts = value.split()
+        start, end = parts[0].split("-")
+        return start, end
+
+    @staticmethod
+    def get_raw_data(lines: list[str]) -> dict[str, Any]:
+        valid_keys = ["nb_drones", "start_hub", "end_hub", "hub", "connection"]
+        unique_keys = ["nb_drones", "start_hub", "end_hub"]
+        zone_keys = ["start_hub", "end_hub", "hub"]
+
+        raw_data: dict[str, Any] = {}
+        syntax_errors: list[str] = []
+
+        first_line = 0
+        hubs: list[str] = []
+        zones: list[str] = []
+        connections: list[str] = []
+        for index, line in enumerate(lines, start=1):
+
+            if line.startswith("#") or not line:
+                continue
+
+            elif line.count(":") != 1:
+                first_line += 1
+                syntax_errors.append(f"Line {index}: expected 'key: value'")
+                continue
+
+            first_line += 1
+
+            key, value = line.split(":")
+
+            value = value.strip(" ")
+            if key not in valid_keys:
+                syntax_errors.append(f"Line {index}: invalid key")
+                continue
+
+            if not value:
+                syntax_errors.append(f"Line {index}: 'value' must not be empty")
+                continue
+
+            if key in unique_keys and key not in raw_data:
+                if key == "nb_drones" and first_line != 1:
+                    syntax_errors.append(f"Line {index}: nb_drones must declared be the first line")
+                    continue
+                else:
+                    raw_data[key] = value
+
+            elif key in unique_keys and key in raw_data:
+                syntax_errors.append(f"Line {index}: {key} must be a unique value")
+                continue
+
+            if key in zone_keys:
+                zones.append(FileParser._get_zone(value))
+                if key == "hub":
+                    hubs.append(value)
+
+            elif key == "connection":
+                if value.count("-") != 1:
+                    syntax_errors.append(f"Line {index}: expected <zone1>-<zone2>")
+                    continue
+                start, end = FileParser._get_connections(value)
+                if not start or not end:
+                    syntax_errors.append(f"Line {index}: Connection zones must not be empty")
+                    continue
+                elif start not in zones or end not in zones:
+                    syntax_errors.append(f"Line {index}: Connections must link only previously defined zones using connection")
+                    continue
+                else:
+                    connections.append(value)
+
+        missing_keys = set(unique_keys) - raw_data.keys()
+        if missing_keys:
+            syntax_errors.append(f"Missing mandatory keys: {missing_keys}")
+
+        if syntax_errors:
+            raise FileParserError(syntax_errors)
+        else:
+            raw_data["hubs"] = hubs
+            raw_data["connections"] = connections
+            return raw_data
+
+class Zones:
+    pass
+
+class Connections:
+    pass
+
+class ConfigData(BaseModel):
+    nb_drones: int = Field(ge = 1)
+    start_hub: str
+    end_hub: str
+    hubs: list[str]
+    connections: list[str]
+
+    def show(self) -> None:
+        print(
+            f"\nConfig data:\n"
+            f" nb_drones: {self.nb_drones}\n"
+            f" start_hub: {self.start_hub}\n"
+            f" end_hub:   {self.end_hub}\n"
+        )
+        print(" hubs:")
+        for hub in self.hubs:
+            print(f"  {hub}")
+
+        print("\nconnections:")
+        for connection in self.connections:
+            print(f"  {connection}")
 
 
-def read_file(path: Path) -> dict[str, Any]:
-    raw_data: dict[str, Any] = {}
-    syntax_errors: list[str] = []
+def parsing(file_path: Path) -> bool:
+    try:
+        print("======READING FILE=======")
+        file = open(file_path, "r")
+        lines = file.read().splitlines()
+        file.close()
+        print("Reading succesful!")
+    except Exception as error:
+        print(f"File Handling Error: {error}")
+        return False
 
-    file = (open(path, "r"))
-    lines = file.read().splitlines()
-    print(lines)
-    for index, line in enumerate(lines, start=1):
-        if line.startswith("#") or not line:
-            continue
-        print(line)
+    else:
+        try:
+            print("======GETTING RAW DATA=======")
+            print("Parsing file....")
+            raw_data = FileParser.get_raw_data(lines)
+            print(raw_data)
+            print("raw data succesfully obtained!")
 
-        if line.count(":") != 1:
-            syntax_errors.append(f"Line {index}: expected 'key:value'")
-            continue
+        except FileParserError as error:
+            print("Syntax errors, fix before running again:")
+            for err in error.args[0]:
+                print(err)
+            return False
 
-        key, value = line.split(":")
-        value = value.strip(" ")
-        if not key or not value:
-            syntax_errors.append(f"Line {index}: 'key' and 'value' must not be empty")
-            continue
+        else:
+            try:
+                print("======PYDANTIC MODEL=======")
+                config_data = ConfigData(**raw_data)
+                config_data.show()
 
-        print(key)
-        print(value)
+            except Exception as error:
+                print(err)
+                return False
 
-
-    print(syntax_errors)
-
-
-
-
+            else:
+                return True
 
 if __name__ == "__main__":
-    path = "/home/veronica-aranibar/Github/Fly-in/maps/easy/01_linear_path.txt"
-    raw_data = read_file(path)
+    file_path = "/home/varaniba/CODAM_CORE/Fly-in/01_linear_path.txt"
+    if parsing(file_path):
+        result = "Succesful"
+    else:
+        result = "Failed"
+
+    print(f"\nParsing: {result}")
+
+
+
 
