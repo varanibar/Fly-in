@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Any
+from enum import StrEnum
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 class FileParserError(Exception):
@@ -94,8 +95,33 @@ class FileParser:
             raw_data["connections"] = connections
             return raw_data
 
-class Zones:
-    pass
+class ZoneTypes(StrEnum):
+    NORMAL = "normal"
+    BLOCKED = "blocked"
+    RESTRICTED = "restricted"
+    PRIORITY = "priority"
+
+class Zones(BaseModel):
+    name: str
+    x: int
+    y: int
+    metadata: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def get_parts(cls, data: str) -> dict[str, Any]:
+        parts = data.split(maxsplit=3)
+
+        if len(parts) != 4:
+            raise ValueError("Error: expected <name> <x> <y> [metadata]")
+
+        return {
+            "name": parts[0],
+            "x": parts[1],
+            "y": parts[2],
+            "metadata": parts[3]
+        }
+
 
 class Connections:
     pass
@@ -104,7 +130,7 @@ class ConfigData(BaseModel):
     nb_drones: int = Field(ge = 1)
     start_hub: str
     end_hub: str
-    hubs: list[str]
+    hubs: list[Zones]
     connections: list[str]
 
     def show(self) -> None:
@@ -142,9 +168,9 @@ def parsing(file_path: Path) -> bool:
             print(raw_data)
             print("raw data succesfully obtained!")
 
-        except FileParserError as error:
+        except FileParserError as syntax_error:
             print("Syntax errors, fix before running again:")
-            for err in error.args[0]:
+            for err in syntax_error.args[0]:
                 print(err)
             return False
 
@@ -154,8 +180,8 @@ def parsing(file_path: Path) -> bool:
                 config_data = ConfigData(**raw_data)
                 config_data.show()
 
-            except Exception as error:
-                print(err)
+            except Exception as pydantic_error:
+                print(pydantic_error)
                 return False
 
             else:
