@@ -36,6 +36,12 @@ RESET = \033[0m # resets all terminal colors and text styles back to their defau
 # ** keep the project environment clean.
 # */
 
+clean:
+	find . -type d -name "__pycache__" -exec rm -rf {} +
+	rm -rf __pycache__ .mypy_cache
+	rm -rf */__pycache__ */.mypy_cache
+
+
 # /*
 # ** FCLEAN
 # ** CLEAN + Remove vitual environment
@@ -48,15 +54,34 @@ RESET = \033[0m # resets all terminal colors and text styles back to their defau
 # ** --check-untyped-defs
 # */
 
+lint:
+	@status=0; \
+	echo "=== flake8 ==="; \
+	python3 -m flake8 . || status=1; \
+	echo "\n=== mypy ==="; \
+	python3 -m mypy . --warn-return-any --warn-unused-ignores --ignore-missing-imports --disallow-untyped-defs --check-untyped-defs
+	exit $$status
+
 # /*
 # ** LINT-STRICT
 # ** (optional) Execute the commands flake8 . and mypy . --strict
 # */
-
+lint-strict:
+	@status=0; \
+	echo "=== flake8 ==="; \
+	python3 -m flake8 . || status=1; \
+	echo "\n=== mypy ==="; \
+	python3 -m mypy --strict . --warn-return-any --warn-unused-ignores --ignore-missing-imports --disallow-untyped-defs --check-untyped-defs
+	exit $$status
 
 #------------ADDITIONAL COMMANDS
 
 parse:
 	@echo "$(GREEN) Parsing files....$(RESET)"
 
+test:
+	python3 -m tests.zone_testing
 
+testc: test clean
+
+.PHONY: run, clean, lint, lint-strict, parse, test
