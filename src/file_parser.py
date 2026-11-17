@@ -3,6 +3,8 @@ from typing import Any
 from enum import StrEnum
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
+from pydantic_core import PydanticCustomError
+
 class FileParserError(Exception):
     pass
 
@@ -119,16 +121,35 @@ class Zones(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def get_parts(cls, data: str) -> dict[str, Any]:
-        parts = data.split(maxsplit=3)
+        if "[" in data:
+            split_data = data.split(" [", maxsplit=1)
+            name_x_y = split_data[0]
+            metadata = "[" + split_data[1]
+        else:
+            raise PydanticCustomError(
+                "zone_format",
+                "Not enough arguments, metadata not found"
+                )
 
-        if len(parts) != 4:
-            raise ValueError("Error: expected <name> <x> <y> [metadata]")
+        parts = name_x_y.split(maxsplit=2)
+        print(f"      Parsing:")
+        print(f"         name_x_y: {name_x_y}")
+        print(f"         metadata: {metadata}")
+        print(f"         parts:    {parts}")
+        print(f"         len:      {len(parts)}")
+        print(f"      Result:",end="")
+
+        if len(parts) != 3:
+            raise PydanticCustomError(
+                "zone_format",
+                "Not enough arguments, expected <name> <x> <y> [metadata]"
+                )
 
         return {
             "name": parts[0],
             "x": parts[1],
             "y": parts[2],
-            "metadata": parts[3]
+            "metadata": metadata
         }
 
 

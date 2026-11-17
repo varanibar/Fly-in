@@ -79,9 +79,19 @@ lint-strict:
 parse:
 	@echo "$(GREEN) Parsing files....$(RESET)"
 
-test:
-	python3 -m tests.zone_testing
+t-val-zone:
+	clear
+	python3 -m tests.zone_testing tests/valid_maps
+	find . -type d -name "__pycache__" -exec rm -rf {} +
+	rm -rf __pycache__ .mypy_cache
+	rm -rf */__pycache__ */.mypy_cache
 
-testc: test clean
+t-inval-zone:
+	clear
+	python3 -m tests.zone_testing tests/invalid_maps/invalid_zones
+	find . -type d -name "__pycache__" -exec rm -rf {} +
+	rm -rf __pycache__ .mypy_cache
+	rm -rf */__pycache__ */.mypy_cache
 
-.PHONY: run, clean, lint, lint-strict, parse, test
+
+.PHONY: run, clean, lint, lint-strict, parse, t-val-zone, t-inval-zone
