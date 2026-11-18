@@ -3,20 +3,26 @@ from typing import Any
 from enum import StrEnum
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
+import sys
 from pydantic_core import PydanticCustomError
 
-class FileParserError(Exception):
-    pass
 
-class FileParser:
+GREEN = "\033[92m"
+RED = "\033[91m"
+BLUE = "\033[94m"
+CYAN = "\033[96m"
+BOLD = "\033[1m"
+RESET = "\033[0m"
 
-    @staticmethod
-    def read_file(path: Path) -> list[str]:
-        file = open(path, "r")
-        lines = file.read().splitlines()
-        file.close()
-        return lines
 
+class SyntaxParserError(Exception):
+    def __init__(self, errors: list[dict[str, str]]):
+        self.errors = errors
+        n = len(self.errors)
+        msg = f"Syntax errors: {n} errors found"
+        super().__init__(msg)
+
+class SyntaxParser:
     @staticmethod
     def _get_zone(value: str) -> str:
         parts = value.split()
@@ -35,7 +41,7 @@ class FileParser:
         zone_keys = ["start_hub", "end_hub", "hub"]
 
         raw_data: dict[str, Any] = {}
-        syntax_errors: list[str] = []
+        errors: list[dict[str, str]] = []
 
         first_line = 0
         hubs: list[str] = []
@@ -48,7 +54,11 @@ class FileParser:
 
             elif line.count(":") != 1:
                 first_line += 1
-                syntax_errors.append(f"Line {index}: expected 'key: value'")
+                errors.append({
+                    "line":str(index),
+                    "type":"invalid amount of arguments",
+                    "message":"expected 'key: value'"
+                    })
                 continue
 
             first_line += 1
@@ -57,53 +67,86 @@ class FileParser:
 
             value = value.strip(" ")
             if key not in valid_keys:
-                syntax_errors.append(f"Line {index}: invalid key")
+                errors.append({
+                    "line":str(index),
+                    "type":"invalid keys",
+                    "message":"invalid key"
+                    })
                 continue
 
             if not value:
-                syntax_errors.append(f"Line {index}: 'value' must not be empty")
+                errors.append({
+                    "line":str(index),
+                    "type":"empty value",
+                    "message":"'value' must not be empty"
+                    })
                 continue
 
             if key in unique_keys and key not in raw_data:
                 if key == "nb_drones" and first_line != 1:
-                    syntax_errors.append(f"Line {index}: nb_drones must declared be the first line")
+                    errors.append({
+                        "line":str(index),
+                        "type":"placement",
+                        "message":"nb_drones must declared be the first line"
+                        })
                     continue
                 else:
                     raw_data[key] = value
 
             elif key in unique_keys and key in raw_data:
-                syntax_errors.append(f"Line {index}: {key} must be a unique value")
+                errors.append({
+                        "line":str(index),
+                        "type":"duplicates",
+                        "message":f"{key} must be a unique value"
+                        })
                 continue
 
             if key in zone_keys:
-                zones.append(FileParser._get_zone(value))
+                zones.append(SyntaxParser._get_zone(value))
                 if key == "hub":
                     hubs.append(value)
 
             elif key == "connection":
                 if value.count("-") != 1:
-                    syntax_errors.append(f"Line {index}: expected <zone1>-<zone2>")
+                    errors.append({
+                            "line":str(index),
+                            "type":"formatting",
+                            "message":"expected <zone1>-<zone2>"
+                            })
                     continue
-                start, end = FileParser._get_connections(value)
+                start, end = SyntaxParser._get_connections(value)
                 if not start or not end:
-                    syntax_errors.append(f"Line {index}: Connection zones must not be empty")
+                    errors.append({
+                            "line":str(index),
+                            "type":"empty value",
+                            "message":"Connection zones must not be empty"
+                            })
                     continue
                 elif start not in zones or end not in zones:
-                    syntax_errors.append(f"Line {index}: Connections must link only previously defined zones using connection")
+                    errors.append({
+                            "line":str(index),
+                            "type":"undefined zones",
+                            "message":"Connections must link only previously defined zones using connection"
+                            })
                     continue
                 else:
                     connections.append(value)
 
         missing_keys = set(unique_keys) - raw_data.keys()
         if missing_keys:
-            syntax_errors.append(f"Missing mandatory keys: {missing_keys}")
+            errors.append({
+                    "line":"None",
+                    "type":"missing keys",
+                    "message":f"Missing mandatory keys: {missing_keys}"
+                    })
 
-        if syntax_errors:
-            raise FileParserError(syntax_errors)
+        if errors:
+            raise SyntaxParserError(errors)
         else:
             raw_data["hubs"] = hubs
             raw_data["connections"] = connections
             return raw_data
+
 
 class ZoneTypes(StrEnum):
     NORMAL = "normal"
@@ -121,7 +164,7 @@ class Zones(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def get_parts(cls, data: str) -> dict[str, Any]:
-        if "[" in data:
+        if " [" in data:
             split_data = data.split(" [", maxsplit=1)
             name_x_y = split_data[0]
             metadata = "[" + split_data[1]
@@ -132,12 +175,12 @@ class Zones(BaseModel):
                 )
 
         parts = name_x_y.split(maxsplit=2)
-        print(f"      Parsing:")
-        print(f"         name_x_y: {name_x_y}")
-        print(f"         metadata: {metadata}")
-        print(f"         parts:    {parts}")
-        print(f"         len:      {len(parts)}")
-        print(f"      Result:",end="")
+        # print(f"     Parsing:")
+        # print(f"         name_x_y: {name_x_y}")
+        # print(f"         metadata: {metadata}")
+        # print(f"         parts:    {parts}")
+        # print(f"         len:      {len(parts)}\n")
+
 
         if len(parts) != 3:
             raise PydanticCustomError(
@@ -155,6 +198,7 @@ class Zones(BaseModel):
 
 class Connections:
     pass
+
 
 class ConfigData(BaseModel):
     nb_drones: int = Field(ge = 1)
@@ -179,50 +223,107 @@ class ConfigData(BaseModel):
             print(f"  {connection}")
 
 
-def parsing(file_path: Path) -> bool:
+class RawData:
+    def __init__(self, file_path: Path):
+        self.file_path: Path = file_path
+        self.lines: list[str] = []
+        self.data: dict[str, Any] = {}
+
+    def get_lines(self) -> None:
+        file = open(self.file_path, "r")
+        self.lines = file.read().splitlines()
+        file.close()
+
+    def get_data(self) -> None:
+        self.data = SyntaxParser.get_raw_data(self.lines)
+
+
+def whole_process(file_path: Path) -> None:
     try:
-        print("======READING FILE=======")
-        lines = FileParser.read_file(file_path)
-        print("Reading succesful!")
-    except Exception as error:
-        print(f"File Handling Error: {error}")
-        return False
-
+        raw_data = RawData(file_path)
+        raw_data.get_lines()
+    except Exception as err:
+        print(f"{RED}{BOLD}Caught {err.__class__.__name__}:{RESET} {err}{RESET}")
     else:
+        print(f"  File: {file_path.name}")
+        print(f"  >> {GREEN}{BOLD}Reading successful!{RESET}")
         try:
-            print("======GETTING RAW DATA=======")
-            print("Parsing file....")
-            raw_data = FileParser.get_raw_data(lines)
-            print(raw_data)
-            print("raw data succesfully obtained!")
-
-        except FileParserError as syntax_error:
-            print("Syntax errors, fix before running again:")
-            for err in syntax_error.args[0]:
-                print(err)
-            return False
-
+            raw_data.get_data()
+        except SyntaxParserError as syntax_err:
+            print(f"  xx {RED}{BOLD}{syntax_err}{RESET}")
+            for synt_err in syntax_err.errors:
+                    print(
+                        f"         {BOLD}Line {synt_err["line"]}:{RESET}"
+                        f" {synt_err["type"]}\n"
+                        f"         Message: {synt_err["message"]}\n"
+                        )
         else:
+            print(f"  >> {GREEN}{BOLD}Raw data obtained successfully!{RESET}")
+            print(f"  >> {BOLD}Creating ConfigData:{RESET}")
             try:
-                print("======PYDANTIC MODEL=======")
-                config_data = ConfigData(**raw_data)
-                config_data.show()
-
-            except Exception as pydantic_error:
-                print(pydantic_error)
-                return False
-
+                map = ConfigData(**raw_data.data)
+            except ValidationError as pydantic_err:
+                print((f"    xx {RED}{BOLD}Found configuration errors:{RESET}"))
+                for pyd_err in pydantic_err.errors():
+                    print(
+                        f"         ________________________\n"
+                        f"         Type:     {pyd_err["type"]}\n"
+                        f"         Location: {pyd_err["loc"]}\n"
+                        f"         Input:    {pyd_err["input"]}\n"
+                        f"         Message:  {pyd_err["msg"]}\n"
+                        )
             else:
-                return True
+                print(f"    >> {GREEN}{BOLD}ConfigData created successfully!{RESET}")
+                # print(map)
+
+
+
+        # else:
+        #     print(f"  >> {GREEN}{BOLD}Raw data obtained successfully!{RESET}")
+        #     print(f"  >> {BOLD}Checking zones:{RESET}")
+        #     try:
+        #         zones = raw_data.data["hubs"]
+        #         Parser.zone_check(zones)
+        #     except ValueError as err:
+        #         print(err)
+        #     else:
+        #         print(f"  >>>> {GREEN}{BOLD}Zones ok!{RESET}\n")
+
+
+def test_directories(directory: Path) -> None:
+    maps = Path.cwd() / directory
+    path_list = sorted(maps.rglob("*.txt"))
+    current_dir = None
+
+    for file_path in path_list:
+        parent_dir = file_path.parent
+
+        if parent_dir != current_dir:
+            current_dir = parent_dir
+            directory = current_dir.relative_to(Path.cwd())
+
+            print(f"\n{BLUE}{BOLD}{'=' * 60}")
+            print(f"{directory}")
+            print(f"{'=' * 60}{RESET}")
+
+        print(f"\n{CYAN}{BOLD}--> {file_path.name}{RESET}")
+
+        whole_process(file_path)
+
+
+def test_individual() -> None:
+    file_path = Path(
+        "/home/varaniba/CODAM_CORE/Fly-in/tests/valid_maps/easy/02_simple_fork.txt"
+        )
+    whole_process(file_path)
+
 
 if __name__ == "__main__":
-    file_path = Path("/home/varaniba/CODAM_CORE/Fly-in/01_linear_path.txt")
-    if parsing(file_path):
-        result = "Succesful"
-    else:
-        result = "Failed"
+    # test_individual()
 
-    print(f"\nParsing: {result}")
+    test_directories(Path("tests/valid_maps"))
+
+    # test_directories(Path("tests/invalid_maps"))
 
 
 
