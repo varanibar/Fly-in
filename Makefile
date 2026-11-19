@@ -77,7 +77,9 @@ lint-strict:
 #------------ADDITIONAL COMMANDS
 
 parse:
+	clear
 	@echo "$(GREEN) Parsing files....$(RESET)"
+	python3 src/file_parser.py
 
 t-val-zone:
 	clear
