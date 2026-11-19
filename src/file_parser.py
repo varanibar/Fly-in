@@ -36,6 +36,7 @@ class SyntaxParser:
 
     @staticmethod
     def get_raw_data(lines: list[str]) -> dict[str, Any]:
+
         valid_keys = ["nb_drones", "start_hub", "end_hub", "hub", "connection"]
         unique_keys = ["nb_drones", "start_hub", "end_hub"]
         zone_keys = ["start_hub", "end_hub", "hub"]
@@ -44,7 +45,7 @@ class SyntaxParser:
         errors: list[dict[str, str]] = []
 
         first_line = 0
-        hubs: list[str] = []
+        hubs: list[tuple[int, str]] = []
         zones: list[str] = []
         connections: list[str] = []
         for index, line in enumerate(lines, start=1):
@@ -91,7 +92,7 @@ class SyntaxParser:
                         })
                     continue
                 else:
-                    raw_data[key] = value
+                    raw_data[key] = (index, value)
 
             elif key in unique_keys and key in raw_data:
                 errors.append({
@@ -104,7 +105,7 @@ class SyntaxParser:
             if key in zone_keys:
                 zones.append(SyntaxParser._get_zone(value))
                 if key == "hub":
-                    hubs.append(value)
+                    hubs.append((index, value))
 
             elif key == "connection":
                 if value.count("-") != 1:
@@ -130,7 +131,7 @@ class SyntaxParser:
                             })
                     continue
                 else:
-                    connections.append(value)
+                    connections.append((index, value))
 
         missing_keys = set(unique_keys) - raw_data.keys()
         if missing_keys:
@@ -168,23 +169,31 @@ class Zones(BaseModel):
             split_data = data.split(" [", maxsplit=1)
             name_x_y = split_data[0]
             metadata = "[" + split_data[1]
+            if "]" in metadata:
+                tmp = metadata.split("]", maxsplit=1)
+                if tmp[1]:
+                    raise PydanticCustomError(
+                        "zone_before_validator",
+                        "Found arguments after metadata"
+                        )
+
+        elif "[" in data:
+            raise PydanticCustomError(
+                "zone_before_validator",
+                "Arguments need to be separated by espaces"
+                )
+
         else:
             raise PydanticCustomError(
-                "zone_format",
-                "Not enough arguments, metadata not found"
+                "zone_before_validator",
+                "Metadata not found"
                 )
 
         parts = name_x_y.split(maxsplit=2)
-        # print(f"     Parsing:")
-        # print(f"         name_x_y: {name_x_y}")
-        # print(f"         metadata: {metadata}")
-        # print(f"         parts:    {parts}")
-        # print(f"         len:      {len(parts)}\n")
-
 
         if len(parts) != 3:
             raise PydanticCustomError(
-                "zone_format",
+                "zone_before_validator",
                 "Not enough arguments, expected <name> <x> <y> [metadata]"
                 )
 
@@ -201,26 +210,24 @@ class Connections:
 
 
 class ConfigData(BaseModel):
-    nb_drones: int = Field(ge = 1)
+    nb_drones: int = Field(gt=0)
     start_hub: str
     end_hub: str
     hubs: list[Zones]
     connections: list[str]
 
-    def show(self) -> None:
-        print(
-            f"\nConfig data:\n"
-            f" nb_drones: {self.nb_drones}\n"
-            f" start_hub: {self.start_hub}\n"
-            f" end_hub:   {self.end_hub}\n"
-        )
-        print(" hubs:")
-        for hub in self.hubs:
-            print(f"  {hub}")
+    @model_validator(mode="before")
+    @classmethod
+    def process_tuple(cls, data: dict[str, Any]):
+        for 
+        return {
+        "nb_drones": data["nb_dones"][1],
+        "start_hub": data["start_hub"][1],
+        "end_hub": data["end_hub"][1],
+        "hubs": data["hubs"][1],
+        "connections": data["connections"][1]
+        }
 
-        print("\nconnections:")
-        for connection in self.connections:
-            print(f"  {connection}")
 
 
 class RawData:
@@ -245,10 +252,10 @@ def whole_process(file_path: Path) -> None:
     except Exception as err:
         print(f"{RED}{BOLD}Caught {err.__class__.__name__}:{RESET} {err}{RESET}")
     else:
-        print(f"  File: {file_path.name}")
         print(f"  >> {GREEN}{BOLD}Reading successful!{RESET}")
         try:
             raw_data.get_data()
+            print((raw_data.data))
         except SyntaxParserError as syntax_err:
             print(f"  xx {RED}{BOLD}{syntax_err}{RESET}")
             for synt_err in syntax_err.errors:
@@ -257,37 +264,27 @@ def whole_process(file_path: Path) -> None:
                         f" {synt_err["type"]}\n"
                         f"         Message: {synt_err["message"]}\n"
                         )
-        else:
-            print(f"  >> {GREEN}{BOLD}Raw data obtained successfully!{RESET}")
-            print(f"  >> {BOLD}Creating ConfigData:{RESET}")
-            try:
-                map = ConfigData(**raw_data.data)
-            except ValidationError as pydantic_err:
-                print((f"    xx {RED}{BOLD}Found configuration errors:{RESET}"))
-                for pyd_err in pydantic_err.errors():
-                    print(
-                        f"         ________________________\n"
-                        f"         Type:     {pyd_err["type"]}\n"
-                        f"         Location: {pyd_err["loc"]}\n"
-                        f"         Input:    {pyd_err["input"]}\n"
-                        f"         Message:  {pyd_err["msg"]}\n"
-                        )
-            else:
-                print(f"    >> {GREEN}{BOLD}ConfigData created successfully!{RESET}")
-                # print(map)
-
-
-
         # else:
         #     print(f"  >> {GREEN}{BOLD}Raw data obtained successfully!{RESET}")
-        #     print(f"  >> {BOLD}Checking zones:{RESET}")
+        #     print(f"     {BOLD}Creating ConfigData...{RESET}")
         #     try:
-        #         zones = raw_data.data["hubs"]
-        #         Parser.zone_check(zones)
-        #     except ValueError as err:
-        #         print(err)
+        #         map = ConfigData(**raw_data.data)
+        #     except ValidationError as pydantic_err:
+        #         print((f"  xx {RED}{BOLD}Found Validation Errors:{RESET}"))
+        #         for pyd_err in pydantic_err.errors():
+        #             print(pyd_err)
+        #             print(
+        #                 f"         ________________________\n"
+        #                 f"         Type:     {pyd_err["type"]}\n"
+        #                 f"         Location: {pyd_err["loc"]}\n"
+        #                 f"         Input:    {pyd_err["input"]}\n"
+        #                 f"         Message:  {pyd_err["msg"]}\n"
+        #                 )
         #     else:
-        #         print(f"  >>>> {GREEN}{BOLD}Zones ok!{RESET}\n")
+        #         print(f"  >> {GREEN}{BOLD}ConfigData created successfully!{RESET}")
+        #         print(map)
+
+
 
 
 def test_directories(directory: Path) -> None:
@@ -309,21 +306,24 @@ def test_directories(directory: Path) -> None:
         print(f"\n{CYAN}{BOLD}--> {file_path.name}{RESET}")
 
         whole_process(file_path)
+        break
+
+
 
 
 def test_individual() -> None:
     file_path = Path(
-        "/home/varaniba/CODAM_CORE/Fly-in/tests/valid_maps/easy/02_simple_fork.txt"
+        "/home/veronica-aranibar/Github/Fly-in/tests/valid_maps/medium/03_priority_puzzle.txt"
         )
     whole_process(file_path)
 
 
 if __name__ == "__main__":
-    # test_individual()
+    test_individual()
 
-    test_directories(Path("tests/valid_maps"))
+    # test_directories(Path("tests/valid_maps"))
 
-    # test_directories(Path("tests/invalid_maps"))
+    # test_directories(Path("tests/invalid_maps/invalid_files"))
 
 
 
