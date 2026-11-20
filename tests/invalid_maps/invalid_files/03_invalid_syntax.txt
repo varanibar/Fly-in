@@ -39,9 +39,11 @@ connection: startgate1 [max_link_capacity=1]
 connection: start-gate2 [max_link_capacity=1]-
 
 # Missing_values
+connection: start-gate2[max_link_capacity=1]
 connection: -gate3 [max_link_capacity=1]
 connection: gate1- [max_link_capacity=1]
-connection: gate2- [max_link_capacity=1]
+connection: gate2-[max_link_capacity=1]
+connection: [max_link_capacity=1]
 
 # No error
 connection: restricted_tunnel1-restricted_tunnel2
