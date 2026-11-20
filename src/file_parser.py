@@ -45,9 +45,34 @@ class SyntaxError(Exception):
             f"          {BOLD}Message:  {RESET}{self.message}\n"
         )
 
-# class TestConnection(BaseModel):
-#     start_end = str
-#     metadata = str
+class SyntaxConnection(BaseModel):
+    start: str
+    end: str
+    metadata: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def separate_metadata(cls, data: str) -> dict[str, Any]:
+        parts = data.split(maxsplit=1)
+        if "-" not in parts[0]:
+            raise ValueError("zones missing - ")
+        zones = parts[0].split("-")
+        if len(zones) != 2:
+            raise ValueError("zone split != 2")
+        start = zones[0]
+        end = zones[1]
+        print(start)
+        print(end)
+        metadata = parts[1]
+        if metadata and not metadata.startswith("["):
+            raise ValueError("metadata not found")
+        return{
+            "start": start,
+            "end": end,
+            "metadata": parts[1]
+        }
+
+
 
 
 class SyntaxParser:
@@ -117,6 +142,16 @@ class SyntaxParser:
                 continue
 
             if key in unique_keys:
+                if key in raw_data:
+                        errors_list.append(
+                            SyntaxError(
+                                index=index,
+                                input=line,
+                                type="duplicate_key",
+                                message=f"{key} must be a unique value"
+                            ))
+                        continue
+
                 if key not in raw_data:
                     raw_data[key] = (index, value)
                     if key == "nb_drones" and first_line != 1:
@@ -127,16 +162,7 @@ class SyntaxParser:
                                 type="line_placement",
                                 message="nb_drones must be declared in the first line"
                             ))
-
-                elif key in raw_data:
-                        errors_list.append(
-                            SyntaxError(
-                                index=index,
-                                input=line,
-                                type="duplicate_key",
-                                message=f"{key} must be a unique value"
-                            ))
-                continue
+                        continue
 
             if key in zone_keys:
                 zones.append(SyntaxParser._get_zone(value))
@@ -144,17 +170,47 @@ class SyntaxParser:
                     hubs.append((index, value))
 
             elif key == "connection":
-                if value.count("-") != 1:
+                if value.count("-") > 1:
                     errors_list.append(
                         SyntaxError(
                             index=index,
                             input=line,
                             type="formatting",
-                            message=f"Expected one '-' separator, expected <zone1>-<zone2>"
+                            message=f"Expected exactly one '-'"
                         ))
                     continue
-                start, end = SyntaxParser._get_connections(value)
+
+                if " [" in value:
+                    start_end = value.split(" [")[0]
+
+                elif "[" in value:
+                    errors_list.append(
+                        SyntaxError(
+                            index=index,
+                            input=line,
+                            type="formatting",
+                            message=f"Metadata must be separated by a space, expected <zone1>-<zone2> [metadata] "
+                        ))
+                    continue
+
+                else:
+                    start_end = value
+
+                if start_end.count("-") != 1:
+                    errors_list.append(
+                        SyntaxError(
+                            index=index,
+                            input=line,
+                            type="formatting",
+                            message=f"Missing '-' separator, expected <zone1>-<zone2>"
+                        ))
+                    continue
+
+                start, end = SyntaxParser._get_connections(start_end)
                 if not start or not end:
+                    print(line)
+                    print(start)
+                    print(end)
                     errors_list.append(
                         SyntaxError(
                             index=index,
@@ -164,6 +220,9 @@ class SyntaxParser:
                         ))
                     continue
                 elif start not in zones or end not in zones:
+                    print(zones)
+                    print(start)
+                    print(end)
                     errors_list.append(
                         SyntaxError(
                             index=index,
@@ -354,7 +413,7 @@ def test_directories(directory: Path) -> None:
 
 def test_individual() -> None:
     file_path = Path(
-        "/home/varaniba/CODAM_CORE/Fly-in/tests/invalid_maps/invalid_files/03_invalid_syntax.txt"
+        "/home/varaniba/CODAM_CORE/Fly-in/tests/valid_maps/medium/02_circular_loop.txt"
         )
     print(f"\n{BLUE}{BOLD}{'=' * 60}")
     print(f"{file_path.name}")
@@ -368,7 +427,13 @@ if __name__ == "__main__":
     # test_directories(Path("tests/valid_maps"))
 
     # test_directories(Path("tests/invalid_maps/invalid_files"))
-
-
+    # try:
+    #     connection0 = SyntaxConnection.model_validate("loop_b-loop_c[max_link_capacity=2]")
+    #     print(connection0)
+    # except ValueError as error:
+    #     print(error)
+    # # connection1 = SyntaxConnection.model_validate("gate2-  [max_link_capacity=1]")
+    # # connection4 = SyntaxConnection.model_validate("gate2-[max_link_capacity=1]")
+    # # connection2 = SyntaxConnection.model_validate("gate2- max_link_capacity=1]")
 
 
