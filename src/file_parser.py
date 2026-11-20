@@ -15,12 +15,40 @@ BOLD = "\033[1m"
 RESET = "\033[0m"
 
 
-class SyntaxParserError(Exception):
-    def __init__(self, errors: list[dict[str, str]]):
-        self.errors = errors
-        n = len(self.errors)
-        msg = f"Syntax errors: {n} errors found"
-        super().__init__(msg)
+class SyntaxErrorList(Exception):
+    def __init__(self, err_list: list[SyntaxError]):
+        self.err_list = err_list
+        self.message = f"{RED}{BOLD}Caught {len(err_list)} Syntax Errors.{RESET}"
+        super().__init__(self.message)
+
+
+class SyntaxError(Exception):
+    def __init__(self, index: int | None, input: str | None, type: str, message: str):
+        super().__init__()
+        self.index = index
+        self.input = input
+        self.type = type
+        self.message = message
+
+    def __str__(self) -> str:
+        if self.index == None:
+            return(
+                F"{BOLD}{RED}  > Absent data:\n{RESET}"
+                f"          {BOLD}Type:     {RESET}{self.type}\n"
+                f"          {BOLD}Message:  {RESET}{self.message}\n"
+            )
+
+        return(
+            f"{BOLD}{RED}  > Line {self.index}:\n{RESET}"
+            f"          {BOLD}Input:    {RESET}{self.input}\n"
+            f"          {BOLD}Type:     {RESET}{self.type}\n"
+            f"          {BOLD}Message:  {RESET}{self.message}\n"
+        )
+
+# class TestConnection(BaseModel):
+#     start_end = str
+#     metadata = str
+
 
 class SyntaxParser:
     @staticmethod
@@ -42,7 +70,7 @@ class SyntaxParser:
         zone_keys = ["start_hub", "end_hub", "hub"]
 
         raw_data: dict[str, Any] = {}
-        errors: list[dict[str, str]] = []
+        errors_list: list[SyntaxError] = []
 
         first_line = 0
         hubs: list[tuple[int, str]] = []
@@ -53,53 +81,61 @@ class SyntaxParser:
             if line.startswith("#") or not line:
                 continue
 
-            elif line.count(":") != 1:
-                first_line += 1
-                errors.append({
-                    "line":str(index),
-                    "type":"invalid amount of arguments",
-                    "message":"expected 'key: value'"
-                    })
-                continue
-
             first_line += 1
+
+            if line.count(":") != 1:
+                errors_list.append(
+                    SyntaxError(
+                        index=index,
+                        input=line,
+                        type="formatting",
+                        message=f"Invalid 'key: value' pair"
+                    ))
+                continue
 
             key, value = line.split(":")
 
             value = value.strip(" ")
+            if not value or not key:
+                errors_list.append(
+                    SyntaxError(
+                        index=index,
+                        input=line,
+                        type="empty_value",
+                        message=f"Key or value cannot be empty"
+                    ))
+                continue
+
             if key not in valid_keys:
-                errors.append({
-                    "line":str(index),
-                    "type":"invalid keys",
-                    "message":"invalid key"
-                    })
+                errors_list.append(
+                    SyntaxError(
+                        index=index,
+                        input=line,
+                        type="invalid_key",
+                        message=f"Allowed keys = {valid_keys}"
+                    ))
                 continue
 
-            if not value:
-                errors.append({
-                    "line":str(index),
-                    "type":"empty value",
-                    "message":"'value' must not be empty"
-                    })
-                continue
-
-            if key in unique_keys and key not in raw_data:
-                if key == "nb_drones" and first_line != 1:
-                    errors.append({
-                        "line":str(index),
-                        "type":"placement",
-                        "message":"nb_drones must declared be the first line"
-                        })
-                    continue
-                else:
+            if key in unique_keys:
+                if key not in raw_data:
                     raw_data[key] = (index, value)
+                    if key == "nb_drones" and first_line != 1:
+                        errors_list.append(
+                            SyntaxError(
+                                index=index,
+                                input=line,
+                                type="line_placement",
+                                message="nb_drones must be declared in the first line"
+                            ))
 
-            elif key in unique_keys and key in raw_data:
-                errors.append({
-                        "line":str(index),
-                        "type":"duplicates",
-                        "message":f"{key} must be a unique value"
-                        })
+                elif key in raw_data:
+                        errors_list.append(
+                            SyntaxError(
+                                index=index,
+                                input=line,
+                                type="duplicate_key",
+                                message=f"{key} must be a unique value"
+                            ))
                 continue
 
             if key in zone_keys:
@@ -109,40 +145,48 @@ class SyntaxParser:
 
             elif key == "connection":
                 if value.count("-") != 1:
-                    errors.append({
-                            "line":str(index),
-                            "type":"formatting",
-                            "message":"expected <zone1>-<zone2>"
-                            })
+                    errors_list.append(
+                        SyntaxError(
+                            index=index,
+                            input=line,
+                            type="formatting",
+                            message=f"Expected one '-' separator, expected <zone1>-<zone2>"
+                        ))
                     continue
                 start, end = SyntaxParser._get_connections(value)
                 if not start or not end:
-                    errors.append({
-                            "line":str(index),
-                            "type":"empty value",
-                            "message":"Connection zones must not be empty"
-                            })
+                    errors_list.append(
+                        SyntaxError(
+                            index=index,
+                            input=line,
+                            type="missing_values",
+                            message=f"Connection must have a start and an end"
+                        ))
                     continue
                 elif start not in zones or end not in zones:
-                    errors.append({
-                            "line":str(index),
-                            "type":"undefined zones",
-                            "message":"Connections must link only previously defined zones using connection"
-                            })
+                    errors_list.append(
+                        SyntaxError(
+                            index=index,
+                            input=line,
+                            type="undefined_zones",
+                            message=f"Connections must link only previously defined zones using connection"
+                        ))
                     continue
                 else:
                     connections.append((index, value))
 
         missing_keys = set(unique_keys) - raw_data.keys()
         if missing_keys:
-            errors.append({
-                    "line":"None",
-                    "type":"missing keys",
-                    "message":f"Missing mandatory keys: {missing_keys}"
-                    })
+            errors_list.append(
+                SyntaxError(
+                    index=None,
+                    input=None,
+                    type="syntax_parsing",
+                    message=f"Missing mandatory keys: {missing_keys}"
+                ))
 
-        if errors:
-            raise SyntaxParserError(errors)
+        if errors_list:
+            raise SyntaxErrorList(err_list=errors_list)
         else:
             raw_data["hubs"] = hubs
             raw_data["connections"] = connections
@@ -219,7 +263,7 @@ class ConfigData(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def process_tuple(cls, data: dict[str, Any]):
-        for 
+        # for
         return {
         "nb_drones": data["nb_dones"][1],
         "start_hub": data["start_hub"][1],
@@ -253,17 +297,15 @@ def whole_process(file_path: Path) -> None:
         print(f"{RED}{BOLD}Caught {err.__class__.__name__}:{RESET} {err}{RESET}")
     else:
         print(f"  >> {GREEN}{BOLD}Reading successful!{RESET}")
+
         try:
             raw_data.get_data()
             print((raw_data.data))
-        except SyntaxParserError as syntax_err:
-            print(f"  xx {RED}{BOLD}{syntax_err}{RESET}")
-            for synt_err in syntax_err.errors:
-                    print(
-                        f"         {BOLD}Line {synt_err["line"]}:{RESET}"
-                        f" {synt_err["type"]}\n"
-                        f"         Message: {synt_err["message"]}\n"
-                        )
+        except SyntaxErrorList as syntax_errors:
+            print(f"  xx {syntax_errors}")
+            for err in syntax_errors.err_list:
+                    print(err)
+
         # else:
         #     print(f"  >> {GREEN}{BOLD}Raw data obtained successfully!{RESET}")
         #     print(f"     {BOLD}Creating ConfigData...{RESET}")
@@ -310,11 +352,13 @@ def test_directories(directory: Path) -> None:
 
 
 
-
 def test_individual() -> None:
     file_path = Path(
-        "/home/veronica-aranibar/Github/Fly-in/tests/valid_maps/medium/03_priority_puzzle.txt"
+        "/home/varaniba/CODAM_CORE/Fly-in/tests/invalid_maps/invalid_files/03_invalid_syntax.txt"
         )
+    print(f"\n{BLUE}{BOLD}{'=' * 60}")
+    print(f"{file_path.name}")
+    print(f"{'=' * 60}{RESET}")
     whole_process(file_path)
 
 
