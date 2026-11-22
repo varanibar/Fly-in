@@ -1,57 +1,76 @@
-# Hard Level 2: Extreme capacity constraints with timing challenges
+# SyntaxParser stress test
+# Intentionally mixes valid and invalid lines to test error collection.
+# Expected error names depend on the parser's error-handling order.
 
-#Missing key
-#start_hub: start 0 -1 [color=green]
+# Missing mandatory key: start_hub is never declared.
 
-#Formatting ":"
-hub waiting_area2 2 1 [color=blue max_drones=4]
-hub: gate1 1 0 [color=orange max_drones=1]:
+# Invalid 'key: value' formatting
+hub waiting_area1 1 1 [color=blue]
+hub: gate1 1 0 [color=orange]:
+ hub: leading_space 1 0
+hub : extra_space 1 0
+hub:  double_space 1 0
+hub: trailing_space 1 0
 
-#Empty_value
+# Empty key/value (reported as formatting by the current regex)
 hub:
-: waiting_area1 1 1 [color=blue max_drones=4]
+: waiting_area1 1 1
 :
 
-# Invalid_key
-hu: gate2 2 0 [color=orange max_drones=1]
+# Invalid key
+hu: gate2 2 0
 
-# Line_placement
+# Invalid nb_drones format
+nb_drones: 1a
+
+# Incorrect placement: nb_drones is not the first non-comment line.
 nb_drones: 12
 
-# No error
+# Valid zone syntax, including optional metadata
 hub: waiting_area2 2 1 [color=blue max_drones=4]
-hub: waiting_area3 3 1 [color=blue max_drones=4]
+hub: waiting_area3 3 1
 hub: restricted_tunnel1 4 0 [zone=restricted color=red max_drones=2]
-hub: restricted_tunnel2 5 0 [zone=restricted color=red max_drones=2]
-hub: restricted_tunnel3 6 0 [zone=restricted color=red max_drones=2]
-hub: priority_bypass1 3 2 [zone=priority color=cyan max_drones=3]
-hub: priority_bypass2 4 2 [zone=priority color=cyan max_drones=3]
-hub: convergence 7 0 [color=yellow max_drones=6]
-hub: final_bottleneck 8 0 [color=orange max_drones=3]
+hub: restricted_tunnel2 5 0
+hub: priority_bypass1 -3 2 [zone=priority color=cyan]
+hub: convergence 7 0 []
+hub: final_bottleneck 8 0 [ ]
 end_hub: goal 9 0 [color=green]
 
-# Duplicate_key
-end_hub: goal 9 0 [color=green]
+# Duplicate unique key
+end_hub: second_goal 10 0
 
+# Duplicate zone name
+hub: waiting_area2 20 20
 
-# Formatting "-"
-connection: startgate1 [max_link_capacity=1]
-connection: start-gate2 [max_link_capacity=1]-
+# Invalid zone structure
+hub: missing_y 2
+hub: missing_coordinates
+hub: wrong_x one 2
+hub: decimal_x 1.5 2
+hub: extra_field 1 2 extra
+hub: attached_metadata 1 2[color=blue]
+hub: missing_bracket 1 2 [color=blue
+hub: extra_bracket 1 2 [color=blue]]
+hub: double_coordinate_space 1  2
 
-# Missing_values
-connection: start-gate2[max_link_capacity=1]
-connection: -gate3 [max_link_capacity=1]
-connection: gate1- [max_link_capacity=1]
-connection: gate2-[max_link_capacity=1]
+# Invalid connection structure
+connection: gate1gate2 [max_link_capacity=1]
+connection: gate1-gate2-
+connection: gate1-gate2[max_link_capacity=1]
+connection: -gate2
+connection: gate1-
+connection: gate1-[max_link_capacity=1]
 connection: [max_link_capacity=1]
+connection: gate1--gate2
+connection: gate1-gate2 [max_link_capacity=1
 
-# No error
+# Valid connection syntax and previously defined zones
 connection: restricted_tunnel1-restricted_tunnel2
-connection: restricted_tunnel2-restricted_tunnel3
+connection: restricted_tunnel2-convergence [max_link_capacity=1]
+connection: waiting_area2-waiting_area3 []
+connection: convergence-goal
 
-# Undefined_zones
+# Undefined zones (well-formed connections)
 connection: gate3-waiting_area3
 connection: waiting_area1-waiting_area2
 connection: gate3-restricted_tunnel1
-
-
