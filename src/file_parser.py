@@ -39,10 +39,9 @@ class SyntaxError(Exception):
             )
 
         return(
-            f"{BOLD}{RED}  > Line {self.index}:\n{RESET}"
-            f"          {BOLD}Input:    {RESET}{self.input}\n"
-            f"          {BOLD}Type:     {RESET}{self.type}\n"
-            f"          {BOLD}Message:  {RESET}{self.message}\n"
+            f"{BOLD}{RED}  > Line {self.index} -> {RESET}{BOLD}'{self.input}'{RESET}\n"
+            f"          Type:     {RESET}{self.type}\n"
+            f"          Message:  {RESET}{self.message}\n"
         )
 
 class SyntaxConnection(BaseModel):
@@ -158,24 +157,13 @@ class SyntaxParser:
         return pair.groupdict()
 
     @staticmethod
-    def _get_zone(value: str) -> str:
-        parts = value.split()
-        return parts[0]
-
-    @staticmethod
-    def _get_connections(value: str) -> tuple[str, str]:
-        parts = value.split()
-        start, end = parts[0].split("-")
-        return start, end
-
-    @staticmethod
     def get_raw_data(lines: list[str]) -> dict[str, Any]:
         raw_data: dict[str, Any] = {}
         errors_list: list[SyntaxError] = []
 
         # Variables for groups of data
-        hubs: list[tuple[int, str]] = []
-        connections: list[str] = []
+        hubs: list[tuple[int, dict[str, Any]]] = [] #list of tuples(index, data), data is a dict obtained with dictgroup
+        connections: list[tuple[int, dict[str, Any]]] = []
 
         # Helper variables
         seen_keys: set[str] = set()
@@ -245,7 +233,7 @@ class SyntaxParser:
                 errors_list.append(error)
                 continue
 
-            # Store extracted values in raw data
+            # Store extracted values in raw data:
 
             # Store nb_drones
             if key == "nb_drones":
@@ -285,7 +273,7 @@ class SyntaxParser:
                             index=index,
                             input=line,
                             type="undefined_zones",
-                            message=f"Connections must link previously defined zones using connection"
+                            message=f"Connections must link previously defined zones"
                         )
                     )
                     continue
@@ -300,7 +288,7 @@ class SyntaxParser:
                 SyntaxError(
                     index=None,
                     input=None,
-                    type="syntax_parsing",
+                    type="missing_keys",
                     message=f"Missing mandatory keys: {missing_keys}"
                 )
             )
@@ -423,15 +411,16 @@ def whole_process(file_path: Path) -> None:
 
         try:
             raw_data.get_data()
-            print((raw_data.data))
+
         except SyntaxErrorList as syntax_errors:
             print(f"  xx {syntax_errors}")
-            for err in syntax_errors.err_list:
-                    print(err)
+            for syntax_err in syntax_errors.err_list:
+                    print(syntax_err)
 
-        # else:
-        #     print(f"  >> {GREEN}{BOLD}Raw data obtained successfully!{RESET}")
-        #     print(f"     {BOLD}Creating ConfigData...{RESET}")
+        else:
+            print(f"  >> {GREEN}{BOLD}Raw data obtained successfully!{RESET}")
+            print(f"     {BOLD}Creating ConfigData...{RESET}")
+            print(raw_data.data)
         #     try:
         #         map = ConfigData(**raw_data.data)
         #     except ValidationError as pydantic_err:
@@ -471,7 +460,7 @@ def test_directories(directory: Path) -> None:
         print(f"\n{CYAN}{BOLD}--> {file_path.name}{RESET}")
 
         whole_process(file_path)
-        break
+
 
 
 
