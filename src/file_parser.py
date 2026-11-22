@@ -3,7 +3,7 @@ from typing import Any
 from enum import StrEnum
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
-import sys
+import re
 from pydantic_core import PydanticCustomError
 
 
@@ -73,9 +73,90 @@ class SyntaxConnection(BaseModel):
         }
 
 
-
-
 class SyntaxParser:
+
+    VALID_KEYS = ("nb_drones", "start_hub", "end_hub", "hub", "connection")
+    UNIQUE_KEYS = ("nb_drones", "start_hub", "end_hub")
+    ZONE_KEYS = ("start_hub", "end_hub", "hub")
+
+    PATTERNS = {
+        "key_value": r"""
+            (?P<key>\w+)       # Key
+            :[ ]               # Colon followed by one space
+            (?P<value>\S[^:]*) # Non-empty value without additional colons
+        """,
+        "nb_drones": r"""
+            (?P<nb_drones>\d+) # Number of drones
+        """,
+        "zone": r"""
+            (?P<name>\S+)      # Zone name
+            [ ]
+            (?P<x>-?\d+)       # X coordinate
+            [ ]
+            (?P<y>-?\d+)       # Y coordinate
+            (?:                # Optional metadata
+                [ ]\[
+                (?P<metadata>.*)
+                \]
+            )?
+        """,
+        "connection": r"""
+            (?P<start>[^-\s]+) # Starting zone
+            -
+            (?P<end>[^-\s]+)   # Ending zone
+            (?:                # Optional metadata
+                [ ]\[
+                (?P<metadata>.*)
+                \]
+            )?
+        """,
+    }
+
+    @staticmethod
+    def _match_value(
+                key: str,
+                value: str,
+                index: int
+            ) -> dict[str, Any]:
+
+        pattern_key = "zone" if key in SyntaxParser.ZONE_KEYS else key
+
+        match = re.fullmatch(
+            SyntaxParser.PATTERNS[pattern_key],
+            value,
+            re.VERBOSE
+        )
+
+        if match is None:
+            raise SyntaxError(
+                index=index,
+                input=f"{key}: {value}",
+                type="formatting",
+                message=f"Invalid {key} format"
+            )
+
+        return match.groupdict()
+
+    @staticmethod
+    def _validate_pair_structure(
+                            line: str,
+                            index: int
+                        ) -> dict[str, Any]:
+        pair = re.fullmatch(
+                    SyntaxParser.PATTERNS["key_value"],
+                    line,
+                    re.VERBOSE
+                )
+        if pair is None:
+            raise SyntaxError(
+                index=index,
+                input=line,
+                type="formatting",
+                message="Expected 'key: value' format"
+            )
+
+        return pair.groupdict()
+
     @staticmethod
     def _get_zone(value: str) -> str:
         parts = value.split()
@@ -89,152 +170,131 @@ class SyntaxParser:
 
     @staticmethod
     def get_raw_data(lines: list[str]) -> dict[str, Any]:
-
-        valid_keys = ["nb_drones", "start_hub", "end_hub", "hub", "connection"]
-        unique_keys = ["nb_drones", "start_hub", "end_hub"]
-        zone_keys = ["start_hub", "end_hub", "hub"]
-
         raw_data: dict[str, Any] = {}
         errors_list: list[SyntaxError] = []
 
-        first_line = 0
+        # Variables for groups of data
         hubs: list[tuple[int, str]] = []
-        zones: list[str] = []
         connections: list[str] = []
+
+        # Helper variables
+        seen_keys: set[str] = set()
+        zones: set[str] = set()
+        first_line = 0
+
         for index, line in enumerate(lines, start=1):
 
+            # Ommit comments or empty lines
             if line.startswith("#") or not line:
                 continue
 
             first_line += 1
 
-            if line.count(":") != 1:
-                errors_list.append(
-                    SyntaxError(
-                        index=index,
-                        input=line,
-                        type="formatting",
-                        message=f"Invalid 'key: value' pair"
-                    ))
+            # Validate key-value structure
+            try:
+                pair = SyntaxParser._validate_pair_structure(line, index)
+            except SyntaxError as error:
+                errors_list.append(error)
                 continue
 
-            key, value = line.split(":")
+            key, value = pair["key"], pair["value"]
 
-            value = value.strip(" ")
-            if not value or not key:
-                errors_list.append(
-                    SyntaxError(
-                        index=index,
-                        input=line,
-                        type="empty_value",
-                        message=f"Key or value cannot be empty"
-                    ))
-                continue
-
-            if key not in valid_keys:
+            # Validate key
+            if key not in SyntaxParser.VALID_KEYS:
                 errors_list.append(
                     SyntaxError(
                         index=index,
                         input=line,
                         type="invalid_key",
-                        message=f"Allowed keys = {valid_keys}"
-                    ))
+                        message=f"Allowed keys = {SyntaxParser.VALID_KEYS}"
+                    )
+                )
                 continue
 
-            if key in unique_keys:
-                if key in raw_data:
+            # Check unique keys
+            if key in SyntaxParser.UNIQUE_KEYS:
+                if key in seen_keys:
                         errors_list.append(
                             SyntaxError(
                                 index=index,
                                 input=line,
                                 type="duplicate_key",
-                                message=f"{key} must be a unique value"
-                            ))
+                                message=f"{key} must be declared only once"
+                            )
+                        )
                         continue
 
-                if key not in raw_data:
-                    raw_data[key] = (index, value)
-                    if key == "nb_drones" and first_line != 1:
-                        errors_list.append(
-                            SyntaxError(
-                                index=index,
-                                input=line,
-                                type="line_placement",
-                                message="nb_drones must be declared in the first line"
-                            ))
-                        continue
+                seen_keys.add(key) # if it's unique and it hasnt been seen
 
-            if key in zone_keys:
-                zones.append(SyntaxParser._get_zone(value))
+            # Check special condition for nb of drones (placement)
+            if key == "nb_drones" and first_line != 1:
+                    errors_list.append(
+                        SyntaxError(
+                            index=index,
+                            input=line,
+                            type="line_placement",
+                            message="nb_drones must be declared in the first line"
+                        )
+                    )
+                    continue
+
+            # Validate the value and extract all the parts using the patterns
+            try:
+                data = SyntaxParser._match_value(key, value, index) #groupdict
+            except SyntaxError as error:
+                errors_list.append(error)
+                continue
+
+            # Store extracted values in raw data
+
+            # Store nb_drones
+            if key == "nb_drones":
+                raw_data[key] = (index, data)
+
+            # Store zones
+            elif key in SyntaxParser.ZONE_KEYS:
+
+                ## Zone duplicates are not allowed
+                name = data["name"]
+                if name in zones:
+                    errors_list.append(
+                        SyntaxError(
+                            index=index,
+                            input=line,
+                            type="duplicate_zone",
+                            message=f"Zone '{name}' is already defined"
+                        )
+                    )
+                    continue
+
+                zones.add(name) # only if unique
+
+                ## Store hub only if the previous zone condition is met
                 if key == "hub":
-                    hubs.append((index, value))
-
-            elif key == "connection":
-                if value.count("-") > 1:
-                    errors_list.append(
-                        SyntaxError(
-                            index=index,
-                            input=line,
-                            type="formatting",
-                            message=f"Expected exactly one '-'"
-                        ))
-                    continue
-
-                if " [" in value:
-                    start_end = value.split(" [")[0]
-
-                elif "[" in value:
-                    errors_list.append(
-                        SyntaxError(
-                            index=index,
-                            input=line,
-                            type="formatting",
-                            message=f"Metadata must be separated by a space, expected <zone1>-<zone2> [metadata] "
-                        ))
-                    continue
-
+                    hubs.append((index, data)) #hub zones, added to a list
                 else:
-                    start_end = value
+                    raw_data[key] = (index, data) #start and end zones, added to the dict
 
-                if start_end.count("-") != 1:
-                    errors_list.append(
-                        SyntaxError(
-                            index=index,
-                            input=line,
-                            type="formatting",
-                            message=f"Missing '-' separator, expected <zone1>-<zone2>"
-                        ))
-                    continue
+            # Store connection
+            elif key == "connection":
 
-                start, end = SyntaxParser._get_connections(start_end)
-                if not start or not end:
-                    print(line)
-                    print(start)
-                    print(end)
-                    errors_list.append(
-                        SyntaxError(
-                            index=index,
-                            input=line,
-                            type="missing_values",
-                            message=f"Connection must have a start and an end"
-                        ))
-                    continue
-                elif start not in zones or end not in zones:
-                    print(zones)
-                    print(start)
-                    print(end)
+                start, end = data["start"], data["end"]
+                if start not in zones or end not in zones:
                     errors_list.append(
                         SyntaxError(
                             index=index,
                             input=line,
                             type="undefined_zones",
-                            message=f"Connections must link only previously defined zones using connection"
-                        ))
+                            message=f"Connections must link previously defined zones using connection"
+                        )
+                    )
                     continue
-                else:
-                    connections.append((index, value))
 
-        missing_keys = set(unique_keys) - raw_data.keys()
+                connections.append((index, data))
+
+        # Check mandatory keys
+        missing_keys = set(SyntaxParser.UNIQUE_KEYS) - raw_data.keys()
+
         if missing_keys:
             errors_list.append(
                 SyntaxError(
@@ -242,14 +302,18 @@ class SyntaxParser:
                     input=None,
                     type="syntax_parsing",
                     message=f"Missing mandatory keys: {missing_keys}"
-                ))
+                )
+            )
 
+        # If errors were found, they are raised using a custom error class
         if errors_list:
             raise SyntaxErrorList(err_list=errors_list)
-        else:
-            raw_data["hubs"] = hubs
-            raw_data["connections"] = connections
-            return raw_data
+
+        # If no errors were found
+        raw_data["hubs"] = hubs #adding hubs to the dict
+        raw_data["connections"] = connections #adding connections to the dict
+
+        return raw_data
 
 
 class ZoneTypes(StrEnum):
@@ -413,7 +477,7 @@ def test_directories(directory: Path) -> None:
 
 def test_individual() -> None:
     file_path = Path(
-        "/home/varaniba/CODAM_CORE/Fly-in/tests/valid_maps/medium/02_circular_loop.txt"
+        "/home/veronica-aranibar/Github/Fly-in/tests/invalid_maps/invalid_files/03_invalid_syntax.txt"
         )
     print(f"\n{BLUE}{BOLD}{'=' * 60}")
     print(f"{file_path.name}")
@@ -427,13 +491,5 @@ if __name__ == "__main__":
     # test_directories(Path("tests/valid_maps"))
 
     # test_directories(Path("tests/invalid_maps/invalid_files"))
-    # try:
-    #     connection0 = SyntaxConnection.model_validate("loop_b-loop_c[max_link_capacity=2]")
-    #     print(connection0)
-    # except ValueError as error:
-    #     print(error)
-    # # connection1 = SyntaxConnection.model_validate("gate2-  [max_link_capacity=1]")
-    # # connection4 = SyntaxConnection.model_validate("gate2-[max_link_capacity=1]")
-    # # connection2 = SyntaxConnection.model_validate("gate2- max_link_capacity=1]")
 
 
