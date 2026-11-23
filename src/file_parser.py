@@ -44,33 +44,6 @@ class SyntaxError(Exception):
             f"          Message:  {RESET}{self.message}\n"
         )
 
-class SyntaxConnection(BaseModel):
-    start: str
-    end: str
-    metadata: str
-
-    @model_validator(mode="before")
-    @classmethod
-    def separate_metadata(cls, data: str) -> dict[str, Any]:
-        parts = data.split(maxsplit=1)
-        if "-" not in parts[0]:
-            raise ValueError("Zone missing - ")
-        zones = parts[0].split("-")
-        if len(zones) != 2:
-            raise ValueError("zone split != 2")
-        start = zones[0]
-        end = zones[1]
-        print(start)
-        print(end)
-        metadata = parts[1]
-        if metadata and not metadata.startswith("["):
-            raise ValueError("metadata not found")
-        return{
-            "start": start,
-            "end": end,
-            "metadata": parts[1]
-        }
-
 
 class SyntaxParser:
 
@@ -90,12 +63,13 @@ class SyntaxParser:
         "zone": r"""
             (?P<name>\S+)      # Zone name
             [ ]
-            (?P<x>-?\d+)       # X coordinate
+            (?P<x>[^\s\[\]]+)  # X coordinate
             [ ]
-            (?P<y>-?\d+)       # Y coordinate
+            (?P<y>[^\s\[\]]+)  # Y coordinate
             (?:                # Optional metadata
-                [ ]\[
-                (?P<metadata>.*)
+                [ ]
+                \[
+                (?P<metadata>[^\[\]]*)
                 \]
             )?
         """,
@@ -318,7 +292,7 @@ class ZoneTypes(StrEnum):
 
 
 class ZoneMetadata(BaseModel):
-    zone: ZoneTypes = ZoneTypes.NORMAL.value
+    zone: ZoneTypes = ZoneTypes.NORMAL
     color: str = "none"
     max_drones: int = Field(default=1, gt=0)
 
@@ -327,18 +301,29 @@ class ZoneMetadata(BaseModel):
     @classmethod
     # Transforms the string into a dict before field validation
     def parse_metadata(cls, metadata: Any): #Any -> str | empty dict
-
         if isinstance(metadata, str):
+
+            if metadata!= " ".join(metadata.split()):
+                    raise PydanticCustomError(
+                        "invalid_spacing",
+                        "Metadata must have no leading, trailing, or repeated spaces"
+                        )
+
             tags = {} # to keep track of the tags
 
             for tag in metadata.split():
                 key, separator, value = tag.partition("=") #partition method splits the str into exactly three parts
 
                 if not separator or not key or not value:
-                    raise ValueError(f"Invalid metadata tag: {tag}")
+                    raise PydanticCustomError(
+                        "invalid_structure",
+                        f"Invalid metadata: '{tag}'"
+                        )
 
                 if key in tags:
-                    raise ValueError(f"Duplicate metadata tag: {tag}")
+                    raise PydanticCustomError(
+                        "duplicate_tag",
+                        f"Duplicate metadata tag: '{key}'")
 
                 tags[key] = value
 
@@ -422,50 +407,53 @@ def whole_process(file_path: Path) -> None:
     try:
         raw_data = RawData(file_path)
         raw_data.get_lines()
-    except Exception as err:
-        print(f"{RED}{BOLD}Caught {err.__class__.__name__}:{RESET} {err}{RESET}")
-    else:
         print(f"  >> {GREEN}{BOLD}Reading successful!{RESET}")
 
-        try:
-            raw_data.get_data()
+        raw_data.get_data()
+        print(f"  >> {GREEN}{BOLD}Raw data obtained successfully!{RESET}")
 
-        except SyntaxErrorList as syntax_errors:
-            print(f"  xx {syntax_errors}")
-            for syntax_err in syntax_errors.err_list:
-                    print(syntax_err)
+    except SyntaxErrorList as syntax_errors:
+        print(f"  xx {syntax_errors}")
+        for syntax_err in syntax_errors.err_list:
+            print(syntax_err)
+
+    except Exception as err:
+        print(f"{RED}{BOLD}Caught {err.__class__.__name__}:{RESET} {err}{RESET}")
+
+    else:
+        try:
+            print(f"     {BOLD}Creating ConfigData...{RESET}")
+            map = ConfigData(**raw_data.data)
+
+        except ValidationError as pydantic_err:
+            print((f"  xx {RED}{BOLD}Found Validation Errors:{RESET}"))
+            for pyd_err in pydantic_err.errors():
+                print_error(raw_data.data, pyd_err)
 
         else:
-            print(f"  >> {GREEN}{BOLD}Raw data obtained successfully!{RESET}")
-            print(f"     {BOLD}Creating ConfigData...{RESET}")
-
-            map = ConfigData(**raw_data.data)
-            print(map)
-            # print(ZoneMetadata(zone="restricted"))
-            test = Zone(name='maze_b2', x=2, y=1)
-            print(test)
-            test_empty = ZoneMetadata.model_validate({})
-            print(ZoneMetadata.model_validate(test.metadata))
-            print(test_empty.zone)
-            print(test.metadata.zone)
-        #     try:
-        #         map = ConfigData(**raw_data.data)
-        #     except ValidationError as pydantic_err:
-        #         print((f"  xx {RED}{BOLD}Found Validation Errors:{RESET}"))
-        #         for pyd_err in pydantic_err.errors():
-        #             print(pyd_err)
-        #             print(
-        #                 f"         ________________________\n"
-        #                 f"         Type:     {pyd_err["type"]}\n"
-        #                 f"         Location: {pyd_err["loc"]}\n"
-        #                 f"         Input:    {pyd_err["input"]}\n"
-        #                 f"         Message:  {pyd_err["msg"]}\n"
-        #                 )
-        #     else:
-        #         print(f"  >> {GREEN}{BOLD}ConfigData created successfully!{RESET}")
-        #         print(map)
+            print(f"  >> {GREEN}{BOLD}ConfigData created successfully!{RESET}")
+            # print(map)
 
 
+def print_error(data: dict[str, Any], error: list[dict[str, Any]]) -> int:
+    location = error["loc"]
+    key = location[0] # (the field in the model, the position if inside an iterable (opt), the field where validation failed, error detail (opt))
+
+    if isinstance(data[key], list):
+        in_list_idx = location[1]
+        index, value = data[key][in_list_idx] # key: list[tuple([0],[1])]
+        field = location[2] if len(location) > 2 else key
+
+    else:
+        index, value = data[key] # key: tuple([0],[1])
+        field = location[1] if len(location) > 2 else key
+
+    print(
+        f"{BOLD}{RED}  > Line {index} -> {RESET}{BOLD}{key}: {RESET}{value}\n"
+        f"          Field:    {field}\n"
+        f"          Type:     {error["type"]}\n"
+        f"          Message:  {error["msg"]}\n"
+    )
 
 
 def test_directories(directory: Path) -> None:
