@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Any
 from enum import StrEnum
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, Field, ValidationError, model_validator, field_validator
 
 import re
 from pydantic_core import PydanticCustomError
@@ -54,7 +54,7 @@ class SyntaxConnection(BaseModel):
     def separate_metadata(cls, data: str) -> dict[str, Any]:
         parts = data.split(maxsplit=1)
         if "-" not in parts[0]:
-            raise ValueError("zones missing - ")
+            raise ValueError("Zone missing - ")
         zones = parts[0].split("-")
         if len(zones) != 2:
             raise ValueError("zone split != 2")
@@ -111,6 +111,12 @@ class SyntaxParser:
         """,
     }
 
+    FORMATS = {
+        "nb_drones": "nb_drones: <positive_integer>",
+        "zone": "<name> <x> <y> [metadata]",
+        "connection": "<zone1>-<zone2> [metadata]",
+    }
+
     @staticmethod
     def _match_value(
                 key: str,
@@ -131,7 +137,7 @@ class SyntaxParser:
                 index=index,
                 input=f"{key}: {value}",
                 type="formatting",
-                message=f"Invalid {key} format"
+                message=f"Invalid {key} format. Expected {SyntaxParser.FORMATS[pattern_key]}"
             )
 
         return match.groupdict()
@@ -237,7 +243,7 @@ class SyntaxParser:
 
             # Store nb_drones
             if key == "nb_drones":
-                raw_data[key] = (index, data)
+                raw_data[key] = (index, data["nb_drones"])
 
             # Store zones
             elif key in SyntaxParser.ZONE_KEYS:
@@ -281,7 +287,7 @@ class SyntaxParser:
                 connections.append((index, data))
 
         # Check mandatory keys
-        missing_keys = set(SyntaxParser.UNIQUE_KEYS) - raw_data.keys()
+        missing_keys = set(SyntaxParser.UNIQUE_KEYS) - seen_keys
 
         if missing_keys:
             errors_list.append(
@@ -311,76 +317,88 @@ class ZoneTypes(StrEnum):
     PRIORITY = "priority"
 
 
-class Zones(BaseModel):
+class ZoneMetadata(BaseModel):
+    zone: ZoneTypes = ZoneTypes.NORMAL.value
+    color: str = "none"
+    max_drones: int = Field(default=1, gt=0)
+
+    model_config = {"extra": "forbid"} #reject unknown metadata properties
+    @model_validator(mode="before")
+    @classmethod
+    # Transforms the string into a dict before field validation
+    def parse_metadata(cls, metadata: Any): #Any -> str | empty dict
+
+        if isinstance(metadata, str):
+            tags = {} # to keep track of the tags
+
+            for tag in metadata.split():
+                key, separator, value = tag.partition("=") #partition method splits the str into exactly three parts
+
+                if not separator or not key or not value:
+                    raise ValueError(f"Invalid metadata tag: {tag}")
+
+                if key in tags:
+                    raise ValueError(f"Duplicate metadata tag: {tag}")
+
+                tags[key] = value
+
+            return tags #if it was a string, it will get sent for pydantic validation
+
+        return metadata #if it was an empty dict it will get filled with the default values
+
+
+class Zone(BaseModel):
     name: str
     x: int
     y: int
-    metadata: str
+    metadata: ZoneMetadata = Field(default_factory=ZoneMetadata) #no metadata field triggers the creation of ZoneMetadata() thanks to default_factory
 
-    @model_validator(mode="before")
+    # If metadata=None, we need to have the default values
+    @field_validator("metadata", mode="before")
     @classmethod
-    def get_parts(cls, data: str) -> dict[str, Any]:
-        if " [" in data:
-            split_data = data.split(" [", maxsplit=1)
-            name_x_y = split_data[0]
-            metadata = "[" + split_data[1]
-            if "]" in metadata:
-                tmp = metadata.split("]", maxsplit=1)
-                if tmp[1]:
-                    raise PydanticCustomError(
-                        "zone_before_validator",
-                        "Found arguments after metadata"
-                        )
-
-        elif "[" in data:
-            raise PydanticCustomError(
-                "zone_before_validator",
-                "Arguments need to be separated by espaces"
-                )
-
-        else:
-            raise PydanticCustomError(
-                "zone_before_validator",
-                "Metadata not found"
-                )
-
-        parts = name_x_y.split(maxsplit=2)
-
-        if len(parts) != 3:
-            raise PydanticCustomError(
-                "zone_before_validator",
-                "Not enough arguments, expected <name> <x> <y> [metadata]"
-                )
-
-        return {
-            "name": parts[0],
-            "x": parts[1],
-            "y": parts[2],
-            "metadata": metadata
-        }
+    def handle_missing_metadata(cls, data: str | None):
+        if data is None:
+            return {} #sending an empty dict to the ZoneMetadata will fill the empty dict with the defaults
+        return data
 
 
-class Connections:
-    pass
+class Connection(BaseModel):
+    start: str
+    end: str
+    metadata: str | None
 
 
 class ConfigData(BaseModel):
     nb_drones: int = Field(gt=0)
-    start_hub: str
-    end_hub: str
-    hubs: list[Zones]
-    connections: list[str]
+    start_hub: Zone
+    end_hub: Zone
+    hubs: list[Zone]
+    connections: list[Connection]
 
     @model_validator(mode="before")
     @classmethod
     def process_tuple(cls, data: dict[str, Any]):
-        # for
+        # nb_drones: (index, data)
+        nb_drones = data["nb_drones"][1]
+
+        # start_hub: (index, {name, x, y, metadata})
+        start_hub = data["start_hub"][1]
+
+        # end_hub: (index, {name, x, y, metadata})
+        end_hub = data["end_hub"][1]
+
+        # hubs: [(index, {name, x, y, metadata})]
+        hubs = [value for index, value in data["hubs"]]
+
+        # connections: [(index, {start, end, metadata})]
+        connections = [value for index, value in data["connections"]]
+
         return {
-        "nb_drones": data["nb_dones"][1],
-        "start_hub": data["start_hub"][1],
-        "end_hub": data["end_hub"][1],
-        "hubs": data["hubs"][1],
-        "connections": data["connections"][1]
+        "nb_drones": nb_drones,
+        "start_hub": start_hub,
+        "end_hub": end_hub,
+        "hubs": hubs,
+        "connections": connections
         }
 
 
@@ -420,7 +438,16 @@ def whole_process(file_path: Path) -> None:
         else:
             print(f"  >> {GREEN}{BOLD}Raw data obtained successfully!{RESET}")
             print(f"     {BOLD}Creating ConfigData...{RESET}")
-            print(raw_data.data)
+
+            map = ConfigData(**raw_data.data)
+            print(map)
+            # print(ZoneMetadata(zone="restricted"))
+            test = Zone(name='maze_b2', x=2, y=1)
+            print(test)
+            test_empty = ZoneMetadata.model_validate({})
+            print(ZoneMetadata.model_validate(test.metadata))
+            print(test_empty.zone)
+            print(test.metadata.zone)
         #     try:
         #         map = ConfigData(**raw_data.data)
         #     except ValidationError as pydantic_err:
@@ -460,6 +487,7 @@ def test_directories(directory: Path) -> None:
         print(f"\n{CYAN}{BOLD}--> {file_path.name}{RESET}")
 
         whole_process(file_path)
+        break
 
 
 
@@ -475,10 +503,10 @@ def test_individual() -> None:
 
 
 if __name__ == "__main__":
-    test_individual()
+    # test_individual()
 
     # test_directories(Path("tests/valid_maps"))
 
-    # test_directories(Path("tests/invalid_maps/invalid_files"))
+    test_directories(Path("tests/invalid_maps/invalid_zones"))
 
 
