@@ -1,3 +1,3 @@
-# from .file_parser import FileParserError, FileParser
+from .file_parser import Parser
 
-# all
+__all__ = ["Parser"]

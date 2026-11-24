@@ -135,7 +135,16 @@ class SyntaxParser:
                 message="Expected 'key: value' format"
             )
 
-        return pair.groupdict()
+        key, value = pair["key"], pair["value"]
+        if key not in SyntaxParser.VALID_KEYS:
+            raise SyntaxError(
+                            index=index,
+                            input=line,
+                            type="invalid_key",
+                            message=f"Allowed keys = {SyntaxParser.VALID_KEYS}"
+                        )
+
+        return key, value
 
     @staticmethod
     def get_raw_data(lines: list[str]) -> dict[str, Any]:
@@ -161,23 +170,9 @@ class SyntaxParser:
 
             # Validate key-value structure
             try:
-                pair = SyntaxParser._validate_pair_structure(line, index)
+                key, value = SyntaxParser._validate_pair_structure(line, index)
             except SyntaxError as error:
                 errors_list.append(error)
-                continue
-
-            key, value = pair["key"], pair["value"]
-
-            # Validate key
-            if key not in SyntaxParser.VALID_KEYS:
-                errors_list.append(
-                    SyntaxError(
-                        index=index,
-                        input=line,
-                        type="invalid_key",
-                        message=f"Allowed keys = {SyntaxParser.VALID_KEYS}"
-                    )
-                )
                 continue
 
             # Check unique keys
@@ -389,24 +384,29 @@ class MapData(BaseModel):
 
 
 
-class FileData(SyntaxParser):
+class Parser(SyntaxParser):
     def __init__(self, file_path: Path):
         self.file_path: Path = file_path
-        self.lines: list[str] = []
-        self.data: dict[str, Any] = {}
+        self.lines: list[str] = self.get_lines()
+        self.map_data: MapData = self.get_data()
 
-    def get_lines(self) -> None:
+    def get_lines(self) -> list[str]:
         file = open(self.file_path, "r")
-        self.lines = file.read().splitlines()
+        lines = file.read().splitlines()
         file.close()
+        return lines
 
-    def get_data(self) -> None:
-        self.data = self.get_raw_data(self.lines)
+    def get_data(self) -> MapData:
+        raw_data: dict[str, Any] = self.get_raw_data(self.lines)
+        map_data = MapData(**raw_data)
+        return map_data
+
+
 
 
 def whole_process(file_path: Path) -> None:
     try:
-        file_data = FileData(file_path)
+        file_data = Parser(file_path)
         file_data.get_lines()
         print(f"  >> {GREEN}{BOLD}Reading successful!{RESET}")
 
@@ -424,12 +424,12 @@ def whole_process(file_path: Path) -> None:
     else:
         try:
             print(f"     {BOLD}Creating MapData...{RESET}")
-            map = MapData(**file_data.data)
+            map = MapData(**file_data.raw_data)
 
         except ValidationError as pydantic_err:
             print((f"  xx {RED}{BOLD}Found Validation Errors:{RESET}"))
             for pyd_err in pydantic_err.errors():
-                print_error(file_data.data, pyd_err)
+                print_error(file_data.raw_data, pyd_err)
 
         else:
             print(f"  >> {GREEN}{BOLD}ConfigData created successfully!{RESET}")
@@ -490,10 +490,10 @@ def test_individual() -> None:
 
 
 if __name__ == "__main__":
-    # test_individual()
+    test_individual()
 
     # test_directories(Path("tests/valid_maps"))
 
-    test_directories(Path("tests/invalid_maps/invalid_zones"))
+    # test_directories(Path("tests/invalid_maps/invalid_zones"))
 
 
