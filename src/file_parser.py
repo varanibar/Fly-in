@@ -55,7 +55,7 @@ class SyntaxParser:
         "key_value": r"""
             (?P<key>\w+)       # Key
             :[ ]               # Colon followed by one space
-            (?P<value>\S[^:]*) # Non-empty value without additional colons
+            (?P<value>[^:]*) # Non-empty value without additional colons
         """,
         "nb_drones": r"""
             (?P<nb_drones>\d+) # Number of drones
@@ -78,7 +78,8 @@ class SyntaxParser:
             -
             (?P<end>[^-\s]+)   # Ending zone
             (?:                # Optional metadata
-                [ ]\[
+                [ ]
+                \[
                 (?P<metadata>.*)
                 \]
             )?
@@ -353,7 +354,7 @@ class Connection(BaseModel):
     metadata: str | None
 
 
-class ConfigData(BaseModel):
+class MapData(BaseModel):
     nb_drones: int = Field(gt=0)
     start_hub: Zone
     end_hub: Zone
@@ -388,7 +389,7 @@ class ConfigData(BaseModel):
 
 
 
-class RawData:
+class FileData(SyntaxParser):
     def __init__(self, file_path: Path):
         self.file_path: Path = file_path
         self.lines: list[str] = []
@@ -400,16 +401,16 @@ class RawData:
         file.close()
 
     def get_data(self) -> None:
-        self.data = SyntaxParser.get_raw_data(self.lines)
+        self.data = self.get_raw_data(self.lines)
 
 
 def whole_process(file_path: Path) -> None:
     try:
-        raw_data = RawData(file_path)
-        raw_data.get_lines()
+        file_data = FileData(file_path)
+        file_data.get_lines()
         print(f"  >> {GREEN}{BOLD}Reading successful!{RESET}")
 
-        raw_data.get_data()
+        file_data.get_data()
         print(f"  >> {GREEN}{BOLD}Raw data obtained successfully!{RESET}")
 
     except SyntaxErrorList as syntax_errors:
@@ -422,13 +423,13 @@ def whole_process(file_path: Path) -> None:
 
     else:
         try:
-            print(f"     {BOLD}Creating ConfigData...{RESET}")
-            map = ConfigData(**raw_data.data)
+            print(f"     {BOLD}Creating MapData...{RESET}")
+            map = MapData(**file_data.data)
 
         except ValidationError as pydantic_err:
             print((f"  xx {RED}{BOLD}Found Validation Errors:{RESET}"))
             for pyd_err in pydantic_err.errors():
-                print_error(raw_data.data, pyd_err)
+                print_error(file_data.data, pyd_err)
 
         else:
             print(f"  >> {GREEN}{BOLD}ConfigData created successfully!{RESET}")
@@ -437,6 +438,7 @@ def whole_process(file_path: Path) -> None:
 
 def print_error(data: dict[str, Any], error: list[dict[str, Any]]) -> int:
     location = error["loc"]
+    print(location)
     key = location[0] # (the field in the model, the position if inside an iterable (opt), the field where validation failed, error detail (opt))
 
     if isinstance(data[key], list):
@@ -446,7 +448,7 @@ def print_error(data: dict[str, Any], error: list[dict[str, Any]]) -> int:
 
     else:
         index, value = data[key] # key: tuple([0],[1])
-        field = location[1] if len(location) > 2 else key
+        field = location[1] if len(location) >= 2 else key
 
     print(
         f"{BOLD}{RED}  > Line {index} -> {RESET}{BOLD}{key}: {RESET}{value}\n"
@@ -475,14 +477,11 @@ def test_directories(directory: Path) -> None:
         print(f"\n{CYAN}{BOLD}--> {file_path.name}{RESET}")
 
         whole_process(file_path)
-        break
-
-
 
 
 def test_individual() -> None:
     file_path = Path(
-        "/home/veronica-aranibar/Github/Fly-in/tests/invalid_maps/invalid_files/03_invalid_syntax.txt"
+        "/home/varaniba/CODAM_CORE/Fly-in/tests/invalid_maps/invalid_files/03_invalid_syntax.txt"
         )
     print(f"\n{BLUE}{BOLD}{'=' * 60}")
     print(f"{file_path.name}")
