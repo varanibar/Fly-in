@@ -388,7 +388,6 @@ class Parser(SyntaxParser):
     def __init__(self, file_path: Path):
         self.file_path: Path = file_path
         self.lines: list[str] = self.get_lines()
-        self.map_data: MapData = self.get_data()
 
     def get_lines(self) -> list[str]:
         file = open(self.file_path, "r")
@@ -398,6 +397,7 @@ class Parser(SyntaxParser):
 
     def get_data(self) -> MapData:
         raw_data: dict[str, Any] = self.get_raw_data(self.lines)
+        # print(raw_data)
         map_data = MapData(**raw_data)
         return map_data
 
