@@ -11,6 +11,10 @@ hub: gate1 1 0 [color=orange]:
 hub : extra_space 1 0
 hub:  double_space 1 0
 hub: trailing_space 1 0
+hub:: double_colons 1 0
+hub: :double_colons 1 0
+h:ub: :double_colons 1 0
+:hub: double_colons 1 0
 
 # Empty key/value (reported as formatting by the current regex)
 hub:
