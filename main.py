@@ -1,7 +1,10 @@
 from pathlib import Path
 from pydantic import ValidationError
-from src.parser import Parser, MapData, SyntaxErrorList
 import sys
+
+#Project modules
+from src.parser import Parser
+from src.errors import SyntaxErrorList
 
 GREEN = "\033[92m"
 RED = "\033[91m"
@@ -16,23 +19,23 @@ def main() -> None:
         sys.exit()
     path = Path(sys.argv[1])
     try:
-        print(f"     {BOLD}Reading file...{RESET}")
+        print(f"{BOLD}   Reading file...{RESET}", end="")
         parser = Parser(path)
-        print(f"  >> {GREEN}{BOLD}Reading successful!{RESET}")
-        print(f"     {BOLD}Parsing data...{RESET}")
+        print(f"{GREEN}{BOLD}  >> Reading successful!{RESET}")
+        print(f"{BOLD}   Parsing data...{RESET}", end="")
 
         map_data = parser.get_data()
-        print(f"  >> {GREEN}{BOLD}Raw data obtained successfully!{RESET}")
+        print(f"{GREEN}{BOLD}  >> Raw data obtained successfully!{RESET}")
         print(map_data)
 
 
     except SyntaxErrorList as syntax_errors:
-        print(f"  xx {syntax_errors}")
+        print(f"{RED}{BOLD}  xx {syntax_errors}{RESET}")
         for syntax_err in syntax_errors.err_list:
             print(syntax_err)
 
     except ValidationError as pydantic:
-        print(f"     xx {RED}{BOLD}Caught MapData error:{RESET}")
+        print(f"{RED}{BOLD}  xx Caught MapData error:{RESET}")
         for pydantic_err in pydantic.errors():
             print(
                 f"          Type:   {pydantic_err["type"]}\n"

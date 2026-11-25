@@ -1,13 +1,19 @@
 from pathlib import Path
 from typing import Any
 from enum import StrEnum
-from pydantic import BaseModel, Field, ValidationError, model_validator, field_validator
-
+from pydantic import (
+    BaseModel,
+    Field,
+    ValidationError,
+    model_validator,
+    field_validator
+    )
 import re
 from pydantic_core import PydanticCustomError
 
-#Project modules
+# Project modules
 from .errors import SyntaxError, SyntaxErrorList
+
 
 class ZoneTypes(StrEnum):
     NORMAL = "normal"
@@ -21,23 +27,25 @@ class ZoneMetadata(BaseModel):
     color: str = "none"
     max_drones: int = Field(default=1, gt=0)
 
-    model_config = {"extra": "forbid"} #reject unknown metadata properties
+    model_config = {"extra": "forbid"}  # reject unknown metadata properties
+
     @model_validator(mode="before")
     @classmethod
     # Transforms the string into a dict before field validation
-    def parse_metadata(cls, metadata: Any) -> str | Any: #Any aswell bc empty dict
+    def parse_metadata(cls, metadata: Any) -> str | Any:
         if isinstance(metadata, str):
 
-            if metadata!= " ".join(metadata.split()):
-                    raise PydanticCustomError(
-                        "invalid_spacing",
-                        "Metadata must have no leading, trailing, or repeated spaces"
-                        )
+            if metadata != " ".join(metadata.split()):
+                raise PydanticCustomError(
+                    "invalid_spacing",
+                    "Metadata must have no leading, "
+                    "trailing, or repeated spaces"
+                    )
 
-            tags = {} # to keep track of the tags
+            tags = {}  # to keep track of the tags
 
             for tag in metadata.split():
-                key, separator, value = tag.partition("=") #partition method splits the str into exactly three parts
+                key, separator, value = tag.partition("=")
 
                 if not separator or not key or not value:
                     raise PydanticCustomError(
@@ -52,23 +60,25 @@ class ZoneMetadata(BaseModel):
 
                 tags[key] = value
 
-            return tags #if it was a string, it will get sent for pydantic validation
+            return tags  # a string gets sent for pydantic validation
 
-        return metadata #if it was an empty dict it will get filled with the default values
+        return metadata  # an empty dict, gets filled with the default values
 
 
 class Zone(BaseModel):
     name: str
     x: int
     y: int
-    metadata: ZoneMetadata = Field(default_factory=ZoneMetadata) #no metadata field triggers the creation of ZoneMetadata() thanks to default_factory
+    metadata: ZoneMetadata = Field(default_factory=ZoneMetadata)
+    # no metadata field triggers the creation of
+    # ZoneMetadata() thanks to default_factory
 
     # If metadata=None, we need to have the default values
     @field_validator("metadata", mode="before")
     @classmethod
     def handle_missing_metadata(cls, data: str | None) -> str | Any:
         if data is None:
-            return {} #sending an empty dict to the ZoneMetadata will fill the empty dict with the defaults
+            return {}  # an empty dict, gets filled with the default values
         return data
 
 
@@ -78,22 +88,18 @@ class Connection(BaseModel):
     metadata: str | None
 
 
-class SyntaxParser:
-
-    VALID_KEYS = ("nb_drones", "start_hub", "end_hub", "hub", "connection")
-    UNIQUE_KEYS = ("nb_drones", "start_hub", "end_hub")
-    ZONE_KEYS = ("start_hub", "end_hub", "hub")
-
-    PATTERNS = {
-        "key_value": r"""
+class Pattern:
+    _PAIR = r"""
             (?P<key>\w+)       # Key
             :[ ]               # Colon followed by one space
             (?P<value>[^:]*) # Non-empty value without additional colons
-        """,
-        "nb_drones": r"""
+        """
+
+    _NB_DRONES = r"""
             (?P<nb_drones>\d+) # Number of drones
-        """,
-        "zone": r"""
+        """
+
+    _ZONE = r"""
             (?P<name>\S+)      # Zone name
             [ ]
             (?P<x>[^\s\[\]]+)  # X coordinate
@@ -105,8 +111,9 @@ class SyntaxParser:
                 (?P<metadata>[^\[\]]*)
                 \]
             )?
-        """,
-        "connection": r"""
+        """
+
+    _CONNECTION = r"""
             (?P<start>[^-\s]+) # Starting zone
             -
             (?P<end>[^-\s]+)   # Ending zone
@@ -116,13 +123,55 @@ class SyntaxParser:
                 (?P<metadata>.*)
                 \]
             )?
-        """,
+        """
+
+    PATTERNS = {
+        "pair": _PAIR,
+        "nb_drones": _NB_DRONES,
+        "zone": _ZONE,
+        "connection": _CONNECTION,
     }
 
+    @staticmethod
+    def match_value(
+                key: str,
+                value: str,
+                index: int
+            ) -> dict[str, Any]:
+
+        pattern_key = "zone" if key in SyntaxParser.ZONE_KEYS else key
+
+        pattern = Pattern.PATTERNS[pattern_key]
+        format = SyntaxParser.FORMATS[pattern_key]
+
+        match = re.fullmatch(
+            pattern,
+            value,
+            re.VERBOSE
+        )
+
+        if match is None:
+            raise SyntaxError(
+                index=index,
+                input=f"{value}",
+                type=f"invalid_{key}_format",
+                message=f"Expected '{format}'"
+            )
+
+        return match.groupdict()
+
+
+class SyntaxParser:
+
+    VALID_KEYS = {"nb_drones", "start_hub", "end_hub", "hub", "connection"}
+    UNIQUE_KEYS = {"nb_drones", "start_hub", "end_hub"}
+    ZONE_KEYS = {"start_hub", "end_hub", "hub"}
+
     FORMATS = {
+        "pair": "key: value",
         "nb_drones": "nb_drones: <positive_integer>",
-        "zone": "<name> <x> <y> [metadata]",
-        "connection": "<zone1>-<zone2> [metadata]",
+        "zone": "hub: <name> <x> <y> [metadata]",
+        "connection": "connection: <zone1>-<zone2> [metadata]",
     }
 
     def __init__(self, lines: list[str]):
@@ -138,113 +187,100 @@ class SyntaxParser:
         self._seen_keys: set[str] = set()
         self._seen_zones: set[str] = set()
 
-    @staticmethod
-    def _match_value(
-                key: str,
-                value: str,
-                index: int
-            ) -> dict[str, Any]:
-
-        pattern_key = "zone" if key in SyntaxParser.ZONE_KEYS else key
-
-        match = re.fullmatch(
-            SyntaxParser.PATTERNS[pattern_key],
-            value,
-            re.VERBOSE
-        )
-
-        if match is None:
-            raise SyntaxError(
-                index=index,
-                input=f"{key}: {value}",
-                type="formatting",
-                message=f"Invalid {key} format. Expected {SyntaxParser.FORMATS[pattern_key]}"
-            )
-
-        return match.groupdict()
-
     def _validate_pair_structure(
                             self,
                             line: str,
                             index: int
                         ) -> dict[str, Any] | None:
 
-        # Get pair by matching to the regex key: value pattern
-        # Returns a dict containing the key and the value
-        pair = re.fullmatch(
-                    SyntaxParser.PATTERNS["key_value"],
-                    line,
-                    re.VERBOSE
-                )
+        pair = None
 
-        # If it is not in a valid pair structure, it returns None
-        if pair is None:
-            self._errors_list.append(
-                    SyntaxError(
-                        index=index,
-                        input=line,
-                        type="formatting",
-                        message="Expected 'key: value' format"
-                    )
-            )
-            return None
+        try:
+            pair = Pattern.match_value(
+                                    key="pair",
+                                    value=line,
+                                    index=index
+                                )
 
-        # Check if key is valid
-        key = pair["key"]
-        if key not in SyntaxParser.VALID_KEYS:
-            self._errors_list.append(
-                SyntaxError(
-                    index=index,
-                    input=line,
-                    type="invalid_key",
-                    message=f"Allowed keys = {SyntaxParser.VALID_KEYS}"
-                )
-            )
-            return None
+        except SyntaxError as formatting_err:
+            self._errors_list.append(formatting_err)
 
-        # Check for duplicates
-        if key in SyntaxParser.UNIQUE_KEYS and \
-            key in self._seen_keys:
+        else:
+            # Check if key is valid
+            key = pair["key"]
+            if key not in SyntaxParser.VALID_KEYS:
                 self._errors_list.append(
                     SyntaxError(
                         index=index,
                         input=line,
-                        type="duplicate_key",
-                        message=f"{key} must be declared only once"
+                        type="invalid_key",
+                        message=f"Allowed keys = {SyntaxParser.VALID_KEYS}"
                     )
                 )
-                return None
 
-        self._seen_keys.add(key) # if it's unique and it hasnt been seen
-        return pair.groupdict()
+            else:
+                # Check for duplicates
+                if key in SyntaxParser.UNIQUE_KEYS and \
+                        key in self._seen_keys:
+                    self._errors_list.append(
+                        SyntaxError(
+                            index=index,
+                            input=line,
+                            type="duplicate_key",
+                            message=f"{key} must be declared only once"
+                        )
+                    )
+                else:
+                    self._seen_keys.add(key)
+
+        finally:
+            return pair
 
     def _validate_nb_drones(
                         self,
                         pair: dict[str, Any],
                         index: int,
                         is_first: bool
-                    ) -> int | None:
+                    ) -> int:
 
         value = pair["value"]
+        nb_drones = 0
 
         try:
-            data = SyntaxParser._match_value("nb_drones", value, index) #groupdict
+            data = Pattern.match_value(
+                        key="nb_drones",
+                        value=value,
+                        index=index
+                    )
+
         except SyntaxError as formatting_err:
             self._errors_list.append(formatting_err)
-            return None
 
-        if is_first != True:
-            self._errors_list.append(
-                        SyntaxError(
-                            index=index,
-                            input=f"nb_drones: {value}",
-                            type="line_placement",
-                            message="nb_drones must be declared in the first line"
-                        )
-            )
-            return None
+        else:
+            nb_drones = int(data["nb_drones"])
 
-        return data["nb_drones"]
+            if nb_drones < 1:
+                self._errors_list.append(
+                            SyntaxError(
+                                index=index,
+                                input=f"nb_drones: {value}",
+                                type="value_error",
+                                message="nb_drones must be more than 0"
+                            )
+                )
+            elif is_first is not True:
+                self._errors_list.append(
+                            SyntaxError(
+                                index=index,
+                                input=f"nb_drones: {value}",
+                                type="line_placement",
+                                message=("nb_drones must be "
+                                         "declared in the first line")
+                            )
+                )
+
+        finally:
+            return nb_drones
 
     def _validate_zone(
                     self,
@@ -253,101 +289,116 @@ class SyntaxParser:
                 ) -> Zone | None:
 
         key, value = pair["key"], pair["value"]
+        zone = None  # if Zone creation is unsuccesful, it will return None
 
-        # Try to get the data dict using regex
         try:
-            data = SyntaxParser._match_value(key, value, index) #groupdict
+            # data: name x y [metadata]
+            data = Pattern.match_value(
+                            key=key,
+                            value=value,
+                            index=index
+                        )
 
         except SyntaxError as formatting_err:
             self._errors_list.append(formatting_err)
-            return None
 
-        # Zone duplicates are not allowed
-        if data["name"] in self._seen_zones:
-            self._errors_list.append(
-                SyntaxError(
-                    index=index,
-                    input=value,
-                    type="duplicate_zone",
-                    message=f"Zone '{data["name"]}' is already defined"
+        else:
+            # Duplicates
+            if data["name"] in self._seen_zones:
+                self._errors_list.append(
+                    SyntaxError(
+                        index=index,
+                        input=value,
+                        type="duplicate_zone",
+                        message=f"Zone '{data["name"]}' is already defined"
+                    )
                 )
-            )
-            return None
 
-        self._seen_zones.add(data["name"])
+            else:
+                self._seen_zones.add(data["name"])
 
-        # Creating the zone with the Zone basemodel
-        try:
-            zone = Zone(**data)
-        except ValidationError as pydantic:
-            message = "Field validation errors"
-            for error in pydantic.errors():
-                loc = str(error["loc"][0])
-                msg = str(error["msg"])
-                tmp = " -> ".join([loc, msg])
-                message = "\n                     - ".join([message, tmp])
-            self._errors_list.append(
-                SyntaxError(
-                    index=index,
-                    input=value,
-                    type="pydantic",
-                    message=f"{message}"
-                )
-            )
-            return None
+                # Create Zone
+                try:
+                    zone = Zone(**data)
 
-        return zone
+                except ValidationError as pydantic:
+                    message = "Field validation errors"
+                    connector = "\n                     - "
+                    for error in pydantic.errors():
+                        loc = str(error["loc"][0])
+                        msg = str(error["msg"])
+                        tmp = " -> ".join([loc, msg])
+                        message = connector.join([message, tmp])
+                    self._errors_list.append(
+                        SyntaxError(
+                            index=index,
+                            input=value,
+                            type="pydantic",
+                            message=f"{message}"
+                        )
+                    )
+
+        finally:
+            return zone
 
     def _validate_connection(
                         self,
                         pair: dict[str, Any],
                         index: int
-                    ) -> Zone | None:
+                    ) -> Connection | None:
 
         key, value = pair["key"], pair["value"]
+        connection = None
 
-        # Try to get the data dict using regex
         try:
-            data = SyntaxParser._match_value(key, value, index) #groupdict
+            data = Pattern.match_value(
+                                key=key,
+                                value=value,
+                                index=index
+                            )
+
         except SyntaxError as formatting_err:
             self._errors_list.append(formatting_err)
-            return None
 
-        start, end = data["start"], data["end"]
-        if start not in self._seen_zones or end not in self._seen_zones:
-            self._errors_list.append(
-                SyntaxError(
-                    index=index,
-                    input=value,
-                    type="undefined_zones",
-                    message=f"Connections must link previously defined zones"
+        else:
+            start, end = data["start"], data["end"]
+            if start not in self._seen_zones or end not in self._seen_zones:
+                self._errors_list.append(
+                    SyntaxError(
+                        index=index,
+                        input=value,
+                        type="undefined_zones",
+                        message=("Connections must link"
+                                 " previously defined zones")
+                    )
                 )
-            )
-            return None
 
-        try:
-            connection = Connection(**data)
-        except ValidationError as pydantic:
-            message = "Field validation errors:"
-            for error in pydantic.errors():
-                loc = str(error["loc"][0])
-                msg = str(error["msg"])
-                tmp = " -> ".join([loc, msg])
-                message = "\n                     - ".join([message, tmp])
-            self._errors_list.append(
-                SyntaxError(
-                    index=index,
-                    input=value,
-                    type="pydantic",
-                    message=f"{message}"
-                )
-            )
-            return None
+            else:
+                try:
+                    connection = Connection(**data)
 
-        return connection
+                except ValidationError as pydantic:
+                    message = "Field validation errors:"
+                    connector = "\n                     - "
+                    for pydantic_err in pydantic.errors():
+                        loc = str(pydantic_err["loc"][0])
+                        msg = str(pydantic_err["msg"])
+                        tmp = " -> ".join([loc, msg])
+                        message = connector.join([message, tmp])
+                    self._errors_list.append(
+                        SyntaxError(
+                            index=index,
+                            input=value,
+                            type="pydantic",
+                            message=f"{message}"
+                        )
+                    )
+
+        finally:
+            return connection
 
     def _check_missing_keys(self) -> None:
-        missing_keys = set(SyntaxParser.UNIQUE_KEYS) - self._seen_keys
+        missing_keys = SyntaxParser.UNIQUE_KEYS - self._seen_keys
 
         if missing_keys:
             self._errors_list.append(
@@ -358,7 +409,6 @@ class SyntaxParser:
                     message=f"Missing mandatory keys: {missing_keys}"
                 )
             )
-
 
     def _validate_data(self, lines: list[str]) -> dict[str, Any]:
         is_first = True
@@ -378,7 +428,8 @@ class SyntaxParser:
             # nb_drones
             if key == "nb_drones":
                 nb_drones = self._validate_nb_drones(pair, index, is_first)
-                if nb_drones is None:
+                is_first = False
+                if nb_drones == 0:
                     continue
                 else:
                     self._nb_drones = nb_drones
@@ -400,10 +451,10 @@ class SyntaxParser:
             # connections
             elif key == "connection":
                 connection = self._validate_connection(pair, index)
-                if zone is None:
+                if connection is None:
                     continue
-                self._connections.append(connection)
-
+                else:
+                    self._connections.append(connection)
 
         # Check missing keys
         self._check_missing_keys()
