@@ -1,4 +1,5 @@
 from pathlib import Path
+from pydantic import ValidationError
 from src.parser import Parser, MapData, SyntaxErrorList
 import sys
 
@@ -15,18 +16,30 @@ def main() -> None:
         sys.exit()
     path = Path(sys.argv[1])
     try:
+        print(f"     {BOLD}Reading file...{RESET}")
         parser = Parser(path)
         print(f"  >> {GREEN}{BOLD}Reading successful!{RESET}")
+        print(f"     {BOLD}Parsing data...{RESET}")
 
         map_data = parser.get_data()
         print(f"  >> {GREEN}{BOLD}Raw data obtained successfully!{RESET}")
-        print(map_data.start_zone)
+        print(map_data)
 
 
     except SyntaxErrorList as syntax_errors:
         print(f"  xx {syntax_errors}")
         for syntax_err in syntax_errors.err_list:
             print(syntax_err)
+
+    except ValidationError as pydantic:
+        print(f"     xx {RED}{BOLD}Caught MapData error:{RESET}")
+        for pydantic_err in pydantic.errors():
+            print(
+                f"          Type:   {pydantic_err["type"]}\n"
+                f"          Loc:    {pydantic_err["loc"]}\n"
+                f"          Msg:    {pydantic_err["msg"]}\n"
+                f"          Input:  {pydantic_err["input"]}\n"
+            )
 
     # except Exception as err:
     #     print(f"{RED}{BOLD}Caught {err.__class__.__name__}:{RESET} {err}{RESET}")

@@ -459,7 +459,7 @@ class SyntaxParser:
 
 
 class MapData(BaseModel):
-    nb_drones: int
+    nb_drones: int = Field(gt=0)
     start_zone: Zone
     end_zone: Zone
     zones: list[Zone]
