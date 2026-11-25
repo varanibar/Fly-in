@@ -170,8 +170,6 @@ class SyntaxParser:
         self._start_zone: Zone
         self._end_zone: Zone
 
-        self._hubs: list[tuple[int, dict[str, Any]]] = []
-        self.connections: list[tuple[int, dict[str, Any]]] = []
         self._errors_list: list[SyntaxError] = []
         self._seen_keys: set[str] = set()
         self._seen_zones: set[str] = set()
@@ -256,12 +254,41 @@ class SyntaxParser:
         self._seen_keys.add(key) # if it's unique and it hasnt been seen
         return pair.groupdict()
 
+    def _validate_nb_drones(
+                        self,
+                        pair: dict[str, Any],
+                        index: int,
+                        is_first: bool
+                    ) -> int | None:
+
+        value = pair["value"]
+
+        try:
+            data = SyntaxParser._match_value("nb_drones", value, index) #groupdict
+        except SyntaxError as formatting_err:
+            self._errors_list.append(formatting_err)
+            return None
+
+        if is_first != True:
+            self._errors_list.append(
+                        SyntaxError(
+                            index=index,
+                            input=f"nb_drones: {value}",
+                            type="line_placement",
+                            message="nb_drones must be declared in the first line"
+                        )
+            )
+            return None
+
+        return data["nb_drones"]
+
     def _validate_zone(
                     self,
-                    key: str,
-                    value: str,
+                    pair: dict[str, Any],
                     index: int
                 ) -> Zone | None:
+
+        key, value = pair["key"], pair["value"]
 
         # Try to get the data dict using regex
         try:
@@ -289,12 +316,12 @@ class SyntaxParser:
         try:
             zone = Zone(**data)
         except ValidationError as pydantic:
-            message = ""
+            message = "Field validation errors"
             for error in pydantic.errors():
                 loc = str(error["loc"][0])
                 msg = str(error["msg"])
                 tmp = " -> ".join([loc, msg])
-                message = "\n                ".join([message, tmp])
+                message = "\n                     - ".join([message, tmp])
             self._errors_list.append(
                 SyntaxError(
                     index=index,
@@ -309,10 +336,12 @@ class SyntaxParser:
 
     def _validate_connection(
                         self,
-                        key: str,
-                        value: str,
+                        pair: dict[str, Any],
                         index: int
-                    ) -> Connection | None:
+                    ) -> Zone | None:
+
+        key, value = pair["key"], pair["value"]
+
         # Try to get the data dict using regex
         try:
             data = SyntaxParser._match_value(key, value, index) #groupdict
@@ -335,12 +364,12 @@ class SyntaxParser:
         try:
             connection = Connection(**data)
         except ValidationError as pydantic:
-            message = ""
+            message = "Field validation errors:"
             for error in pydantic.errors():
                 loc = str(error["loc"][0])
                 msg = str(error["msg"])
                 tmp = " -> ".join([loc, msg])
-                message = "\n                ".join([message, tmp])
+                message = "\n                     - ".join([message, tmp])
             self._errors_list.append(
                 SyntaxError(
                     index=index,
@@ -353,83 +382,7 @@ class SyntaxParser:
 
         return connection
 
-    def _validate_nb_drones(
-                        self,
-                        line: str,
-                        pair: str,
-                        index: int,
-                        is_first: bool
-                    ) -> int | None:
-
-        value = pair["value"]
-
-        try:
-            data = SyntaxParser._match_value("nb_drones", value, index) #groupdict
-        except SyntaxError as formatting_err:
-            self._errors_list.append(formatting_err)
-            return None
-
-        if is_first != True:
-            self._errors_list.append(
-                        SyntaxError(
-                            index=index,
-                            input=line,
-                            type="line_placement",
-                            message="nb_drones must be declared in the first line"
-                        )
-            )
-            return None
-
-        return data["nb_drones"]
-
-
-    def validate_data(self, lines: list[str]) -> dict[str, Any]:
-        is_first = True
-
-        for index, line in enumerate(lines, start=1):
-
-            # Ommit comments or empty lines
-            if line.startswith("#") or not line:
-                continue
-
-            # Validate key-value structure
-            pair = self._validate_pair_structure(line, index)
-            if pair is None:
-                continue
-
-            key, value = pair["key"], pair["value"]
-
-            # nb_drones
-            if key == "nb_drones":
-                nb_drones = self._validate_nb_drones(line, pair, index, is_first)
-                if nb_drones is None:
-                    continue
-                else:
-                    self._nb_drones = nb_drones
-            is_first = False
-
-            # zones
-            if key in SyntaxParser.ZONE_KEYS:
-                zone = self._validate_zone(key, value, index)
-                if zone is None:
-                    continue
-                else:
-                    if key == "start_hub":
-                        self._start_zone = zone
-                    elif key == "end_hub":
-                        self._end_zone = zone
-                    else:
-                        self._zones.append(zone)
-
-            # connections
-            elif key == "connection":
-                connection = self._validate_connection(key, value, index)
-                if zone is None:
-                    continue
-                self.connections.append(connection)
-
-
-        # Check mandatory keys
+    def _check_missing_keys(self) -> None:
         missing_keys = set(SyntaxParser.UNIQUE_KEYS) - self._seen_keys
 
         if missing_keys:
@@ -442,66 +395,90 @@ class SyntaxParser:
                 )
             )
 
+
+    def _validate_data(self, lines: list[str]) -> dict[str, Any]:
+        is_first = True
+
+        for index, line in enumerate(lines, start=1):
+
+            # Ommit comments or empty lines
+            if line.startswith("#") or not line:
+                continue
+
+            # Validate key-value structure
+            pair = self._validate_pair_structure(line, index)
+            if pair is None:
+                continue
+            key = pair["key"]
+
+            # nb_drones
+            if key == "nb_drones":
+                nb_drones = self._validate_nb_drones(pair, index, is_first)
+                if nb_drones is None:
+                    continue
+                else:
+                    self._nb_drones = nb_drones
+            is_first = False
+
+            # zones
+            if key in SyntaxParser.ZONE_KEYS:
+                zone = self._validate_zone(pair, index)
+                if zone is None:
+                    continue
+                else:
+                    if key == "start_hub":
+                        self._start_zone = zone
+                    elif key == "end_hub":
+                        self._end_zone = zone
+                    else:
+                        self._zones.append(zone)
+
+            # connections
+            elif key == "connection":
+                connection = self._validate_connection(pair, index)
+                if zone is None:
+                    continue
+                self._connections.append(connection)
+
+
+        # Check missing keys
+        self._check_missing_keys()
+
         # If errors were found, they are raised using a custom error class
         if self._errors_list:
             raise SyntaxErrorList(err_list=self._errors_list)
 
         # If no errors were found
-        self._raw_data["hubs"] = self._zones #adding hubs to the dict
-        self._raw_data["connections"] = self._connections #adding connections to the dict
+        self._raw_data["nb_drones"] = self._nb_drones
+        self._raw_data["start_zone"] = self._start_zone
+        self._raw_data["end_zone"] = self._end_zone
+        self._raw_data["zones"] = self._zones
+        self._raw_data["connections"] = self._connections
 
         return self._raw_data
 
 
 class MapData(BaseModel):
-    nb_drones: int = Field(gt=0)
-    start_hub: Zone
-    end_hub: Zone
-    hubs: list[Zone]
+    nb_drones: int
+    start_zone: Zone
+    end_zone: Zone
+    zones: list[Zone]
     connections: list[Connection]
-
-    @model_validator(mode="before")
-    @classmethod
-    def process_tuple(cls, data: dict[str, Any]) -> dict[str, Any]:
-        # nb_drones: (index, data)
-        nb_drones = data["nb_drones"][1]
-
-        # start_hub: (index, {name, x, y, metadata})
-        start_hub = data["start_hub"][1]
-
-        # end_hub: (index, {name, x, y, metadata})
-        end_hub = data["end_hub"][1]
-
-        # hubs: [(index, {name, x, y, metadata})]
-        hubs = [value for index, value in data["hubs"]]
-
-        # connections: [(index, {start, end, metadata})]
-        connections = [value for index, value in data["connections"]]
-
-        return {
-        "nb_drones": nb_drones,
-        "start_hub": start_hub,
-        "end_hub": end_hub,
-        "hubs": hubs,
-        "connections": connections
-        }
-
 
 
 class Parser(SyntaxParser):
     def __init__(self, file_path: Path):
         self.file_path: Path = file_path
-        self.lines: list[str] = self.get_lines()
+        self.lines: list[str] = self._get_lines()
         super().__init__(lines=self.lines)
 
-    def get_lines(self) -> list[str]:
+    def _get_lines(self) -> list[str]:
         file = open(self.file_path, "r")
         lines = file.read().splitlines()
         file.close()
         return lines
 
     def get_data(self) -> Any:
-        raw_data: dict[str, Any] = self.validate_data(self.lines)
-        print(raw_data)
-        # map_data = MapData(**raw_data)
-        return raw_data
+        raw_data: dict[str, Any] = self._validate_data(self.lines)
+        map_data = MapData(**raw_data)
+        return map_data

@@ -20,7 +20,8 @@ def main() -> None:
 
         map_data = parser.get_data()
         print(f"  >> {GREEN}{BOLD}Raw data obtained successfully!{RESET}")
-        print(map_data)
+        print(map_data.start_zone)
+
 
     except SyntaxErrorList as syntax_errors:
         print(f"  xx {syntax_errors}")
