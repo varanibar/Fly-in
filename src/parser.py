@@ -90,39 +90,43 @@ class Connection(BaseModel):
 
 class Pattern:
     _PAIR = r"""
-            (?P<key>\w+)       # Key
-            :[ ]               # Colon followed by one space
-            (?P<value>[^:]*) # Non-empty value without additional colons
+            [ ]*              # Zero or more spaces
+            (?P<key>[\w]+)    # Any word character
+            :[ ]+             # Colon followed by one or more spaces
+            (?P<value>[^:]+)  # one or more chars except ':'
         """
 
     _NB_DRONES = r"""
-            (?P<nb_drones>\d+) # Number of drones
+            (?P<nb_drones>[+]?[\d]+) # zero or one of '+', one or more digits
+            [ ]*               # Zero or more spaces
         """
 
     _ZONE = r"""
-            (?P<name>\S+)      # Zone name
-            [ ]
-            (?P<x>[^\s\[\]]+)  # X coordinate
-            [ ]
-            (?P<y>[^\s\[\]]+)  # Y coordinate
+            (?P<name>\S+)      # one or more of any non-whitespace character
+            [ ]+               # one or more spaces
+            (?P<x>[^\s\[\]]+)  # A character except: any whitespace and []
+            [ ]+               # one or more spaces
+            (?P<y>[^\s\[\]]+)  # A character except: any whitespace and []
             (?:                # Optional metadata
-                [ ]
-                \[
-                (?P<metadata>[^\[\]]*)
-                \]
+                [ ]+           # One or more spaces
+                \[             # '[' 
+                (?P<metadata>[^\[\]]*) # Zero or more chars except []
+                \]             # '['
             )?
+            [ ]*               # Zero or more spaces
         """
 
     _CONNECTION = r"""
-            (?P<start>[^-\s]+) # Starting zone
-            -
-            (?P<end>[^-\s]+)   # Ending zone
-            (?:                # Optional metadata
-                [ ]
-                \[
-                (?P<metadata>.*)
-                \]
+            (?P<start>[^-\s]+) # one or more chars except '-' and any whitespace
+            -                  # dash
+            (?P<end>[^-\s]+)   # one or more chars except '-' and any whitespace
+            (?:                # Optional
+                [ ]+           # One or more spaces
+                \[             # '['
+                (?P<metadata>[^\[\]]*) # Zero or more chars except []
+                \]             # '['
             )?
+            [ ]*               # Zero or more spaces
         """
 
     PATTERNS = {
@@ -233,8 +237,7 @@ class SyntaxParser:
                 else:
                     self._seen_keys.add(key)
 
-        finally:
-            return pair
+        return pair
 
     def _validate_nb_drones(
                         self,
@@ -244,7 +247,6 @@ class SyntaxParser:
                     ) -> int:
 
         value = pair["value"]
-        nb_drones = 0
 
         try:
             data = Pattern.match_value(
@@ -259,16 +261,18 @@ class SyntaxParser:
         else:
             nb_drones = int(data["nb_drones"])
 
-            if nb_drones < 1:
+            if nb_drones == 0:
                 self._errors_list.append(
                             SyntaxError(
                                 index=index,
                                 input=f"nb_drones: {value}",
-                                type="value_error",
-                                message="nb_drones must be more than 0"
+                                type="nb_drones",
+                                message=("nb_drones must be "
+                                         "more than 0")
                             )
                 )
-            elif is_first is not True:
+
+            if is_first is not True:
                 self._errors_list.append(
                             SyntaxError(
                                 index=index,
@@ -279,7 +283,6 @@ class SyntaxParser:
                             )
                 )
 
-        finally:
             return nb_drones
 
     def _validate_zone(
@@ -338,8 +341,7 @@ class SyntaxParser:
                         )
                     )
 
-        finally:
-            return zone
+        return zone
 
     def _validate_connection(
                         self,
@@ -394,8 +396,7 @@ class SyntaxParser:
                         )
                     )
 
-        finally:
-            return connection
+        return connection
 
     def _check_missing_keys(self) -> None:
         missing_keys = SyntaxParser.UNIQUE_KEYS - self._seen_keys
