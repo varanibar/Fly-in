@@ -23,7 +23,7 @@ class ZoneTypes(StrEnum):
 
 
 class ZoneMetadata(BaseModel):
-    zone: ZoneTypes = ZoneTypes.NORMAL
+    type: ZoneTypes = ZoneTypes.NORMAL
     color: str = "none"
     max_drones: int = Field(default=1, gt=0)
 
@@ -31,9 +31,11 @@ class ZoneMetadata(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    # Transforms the string into a dict before field validation
     def parse_metadata(cls, metadata: Any) -> str | Any:
+        #it can be a str or an empty dict (bc handle_missing_metadata())
         if isinstance(metadata, str):
+            # if its a string, it gets parsed and if it succeeds it returns
+            # a dict containing the tags ready for pydantic validation
 
             if metadata != " ".join(metadata.split()):
                 raise PydanticCustomError(
@@ -60,32 +62,91 @@ class ZoneMetadata(BaseModel):
 
                 tags[key] = value
 
-            return tags  # a string gets sent for pydantic validation
+            return tags  # dict containing the tags, ready for field validation
 
         return metadata  # an empty dict, gets filled with the default values
 
 
 class Zone(BaseModel):
-    name: str
+    name: str = Field(pattern=r"^[^-\s]+$")
     x: int
     y: int
-    metadata: ZoneMetadata = Field(default_factory=ZoneMetadata)
-    # no metadata field triggers the creation of
-    # ZoneMetadata() thanks to default_factory
+    metadata: ZoneMetadata
 
     # If metadata=None, we need to have the default values
     @field_validator("metadata", mode="before")
     @classmethod
-    def handle_missing_metadata(cls, data: str | None) -> str | Any:
-        if data is None:
+    def handle_missing_metadata(cls, metadata: str | None) -> str | Any:
+        if metadata is None: #In case its None, we need the default values
             return {}  # an empty dict, gets filled with the default values
-        return data
+        return metadata
+
+    @property
+    def type(self) -> str:
+        return self.metadata.type
+
+    @property
+    def color(self) -> str:
+        return self.metadata.color
+
+    @property
+    def max_drones(self) -> str:
+        return self.metadata.max_drones
 
 
 class Connection(BaseModel):
     start: str
     end: str
-    metadata: str | None
+    max_link_capacity: int = Field(default=1, gt=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def parse_metadata(cls, data: dict[str, Any]) -> dict[str, Any]:
+        metadata = data.pop("metadata")
+
+        if metadata is not None:
+
+            if metadata != " ".join(metadata.split()):
+                raise PydanticCustomError(
+                    "invalid_spacing",
+                    "Metadata must have no leading, "
+                    "trailing, or repeated spaces"
+                    )
+
+            if len(metadata.split()) > 1:
+                raise PydanticCustomError(
+                    "too_many_tags",
+                    "Only one tag allowed"
+                    )
+
+            key, separator, value = metadata.partition("=")
+
+            if not separator or not key or not value:
+                raise PydanticCustomError(
+                    "invalid_structure",
+                    f"Expected '[max_link_capacity=<positive_integer>]'"
+                    )
+
+            if key != "max_link_capacity":
+                raise PydanticCustomError(
+                    "invalid_tag",
+                    f"Invalid tag: '{key}'. Expected '[max_link_capacity=...]'"
+                    )
+
+            data[key] = value
+
+        return data
+
+    @model_validator(mode="after")
+    def validate_start_end(self) -> "Connection":
+
+        if self.start == self.end:
+                raise PydanticCustomError(
+                    "connection_zones",
+                    f"Start zone and end zone can't be the same"
+                    )
+
+        return self
 
 
 class Pattern:
@@ -109,8 +170,8 @@ class Pattern:
             (?P<y>[^\s\[\]]+)  # A character except: any whitespace and []
             (?:                # Optional metadata
                 [ ]+           # One or more spaces
-                \[             # '[' 
-                (?P<metadata>[^\[\]]*) # Zero or more chars except []
+                \[             # '['
+                (?P<metadata>[^\[\]]+) # one or more chars except []
                 \]             # '['
             )?
             [ ]*               # Zero or more spaces
@@ -123,7 +184,7 @@ class Pattern:
             (?:                # Optional
                 [ ]+           # One or more spaces
                 \[             # '['
-                (?P<metadata>[^\[\]]*) # Zero or more chars except []
+                (?P<metadata>[^\[\]]+) # one or more chars except []
                 \]             # '['
             )?
             [ ]*               # Zero or more spaces
@@ -247,6 +308,7 @@ class SyntaxParser:
                     ) -> int:
 
         value = pair["value"]
+        nb_drones = 0
 
         try:
             data = Pattern.match_value(
@@ -283,7 +345,7 @@ class SyntaxParser:
                             )
                 )
 
-            return nb_drones
+        return nb_drones
 
     def _validate_zone(
                     self,
@@ -380,13 +442,22 @@ class SyntaxParser:
                     connection = Connection(**data)
 
                 except ValidationError as pydantic:
-                    message = "Field validation errors:"
+                    # message = "Field validation errors:"
+                    # connector = "\n                     - "
+                    # for pydantic_err in pydantic.errors():
+                    #     loc = str(pydantic_err["loc"][0])
+                    #     msg = str(pydantic_err["msg"])
+                    #     tmp = " -> ".join([loc, msg])
+                    #     message = connector.join([message, tmp])
+                    message = "Field validation errors for connection:"
                     connector = "\n                     - "
                     for pydantic_err in pydantic.errors():
-                        loc = str(pydantic_err["loc"][0])
+                        type = str(pydantic_err["type"])
+                        loc = str(pydantic_err["loc"])
                         msg = str(pydantic_err["msg"])
-                        tmp = " -> ".join([loc, msg])
+                        tmp = " -> ".join([type, loc, msg])
                         message = connector.join([message, tmp])
+
                     self._errors_list.append(
                         SyntaxError(
                             index=index,
@@ -480,6 +551,20 @@ class MapData(BaseModel):
     end_zone: Zone
     zones: list[Zone]
     connections: list[Connection]
+
+    def show(self) -> None:
+        print(f"nb_drones = {self.nb_drones}")
+        start = self.start_zone
+        end = self.end_zone
+        print()
+        print(f"start_zone = {start.name} {start.x} {start.y} {start.metadata}")
+        print(f"end_zone = {end.name} {end.x} {end.y} {end.type} {end.color} {end.max_drones}")
+        print()
+        for z in self.zones:
+            print(f"zone = {z.name} {z.x} {z.y} {z.metadata}")
+        print()
+        for c in self.connections:
+            print(c)
 
 
 class Parser(SyntaxParser):

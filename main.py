@@ -26,7 +26,8 @@ def main() -> None:
 
         map_data = parser.get_data()
         print(f"{GREEN}{BOLD}  >> Raw data obtained successfully!{RESET}")
-        print(map_data)
+
+        map_data.show()
 
 
     except SyntaxErrorList as syntax_errors:
