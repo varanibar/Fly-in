@@ -10,6 +10,7 @@ from pydantic import (
     )
 import re
 from pydantic_core import PydanticCustomError
+import webcolors
 
 # Project modules
 from .errors import SyntaxError, SyntaxErrorList
@@ -24,14 +25,29 @@ class ZoneTypes(StrEnum):
 
 class ZoneMetadata(BaseModel):
     zone: ZoneTypes = ZoneTypes.NORMAL
-    color: str = "none"
+    color: webcolors.IntegerRGB = Field(default=None)
     max_drones: int = Field(default=1, gt=0)
 
     model_config = {"extra": "forbid"}  # reject unknown metadata properties
 
+    @field_validator("color", mode="before")
+    def get_rgb(cls, color: str) -> webcolors.IntegerRGB:
+
+        try:
+            rgb = webcolors.name_to_rgb(color)
+
+        except Exception as err:
+            raise PydanticCustomError(
+                    "invalid_color",
+                    f"'{color}' is not valid"
+                    )
+
+        return rgb
+
+
     @model_validator(mode="before")
     @classmethod
-    def parse_metadata(cls, metadata: Any) -> str | Any:
+    def get_tags(cls, metadata: Any) -> str | Any:
         #it can be a str or an empty dict (bc handle_missing_metadata())
         if isinstance(metadata, str):
             # if its a string, it gets parsed and if it succeeds it returns
@@ -67,6 +83,7 @@ class ZoneMetadata(BaseModel):
         return metadata  # an empty dict, gets filled with the default values
 
 
+
 class Zone(BaseModel):
     name: str = Field(pattern=r"^[^-\s]+$")
     x: int
@@ -86,11 +103,11 @@ class Zone(BaseModel):
         return self.metadata.zone
 
     @property
-    def color(self) -> str:
+    def color(self) -> webcolors.IntegerRGB:
         return self.metadata.color
 
     @property
-    def max_drones(self) -> str:
+    def max_drones(self) -> int:
         return self.metadata.max_drones
 
 
@@ -251,7 +268,7 @@ class SyntaxParser:
         self._errors_list: list[SyntaxError] = []
         self._seen_keys: set[str] = set()
         self._seen_zones: set[str] = set()
-        self._seen_connections: set[frozenset] = set()
+        self._seen_connections: set[frozenset[str]] = set()
 
     def _validate_pair_structure(
                             self,
@@ -392,10 +409,13 @@ class SyntaxParser:
                     message = "Field validation errors"
                     connector = "\n                     - "
                     for error in pydantic.errors():
-                        loc = str(error["loc"][0])
+                        type = str(error["type"])
+                        loc = ".".join(map(str, error["loc"]))
                         msg = str(error["msg"])
-                        tmp = " -> ".join([loc, msg])
+
+                        tmp = " -> ".join([type, loc, msg])
                         message = connector.join([message, tmp])
+
                     self._errors_list.append(
                         SyntaxError(
                             index=index,
@@ -449,12 +469,10 @@ class SyntaxParser:
                     connector = "\n                     - "
                     for pydantic_err in pydantic.errors():
                         type = str(pydantic_err["type"])
+                        loc = ".".join(map(str, pydantic_err["loc"]))
                         msg = str(pydantic_err["msg"])
-                        if pydantic_err["loc"]:
-                            loc = str(pydantic_err["loc"])
-                            tmp = " -> ".join([type, loc, msg])
-                        else:
-                            tmp = " -> ".join([type, msg])
+
+                        tmp = " -> ".join([type, loc, msg])
                         message = connector.join([message, tmp])
 
                     err_list.append(
