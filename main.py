@@ -38,6 +38,7 @@ def main() -> None:
     except ValidationError as pydantic:
         print(f"{RED}{BOLD}  xx Caught MapData error:{RESET}")
         for pydantic_err in pydantic.errors():
+            print(pydantic_err)
             print(
                 f"          Type:   {pydantic_err["type"]}\n"
                 f"          Loc:    {pydantic_err["loc"]}\n"

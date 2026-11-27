@@ -23,7 +23,7 @@ class ZoneTypes(StrEnum):
 
 
 class ZoneMetadata(BaseModel):
-    type: ZoneTypes = ZoneTypes.NORMAL
+    zone: ZoneTypes = ZoneTypes.NORMAL
     color: str = "none"
     max_drones: int = Field(default=1, gt=0)
 
@@ -51,8 +51,8 @@ class ZoneMetadata(BaseModel):
 
                 if not separator or not key or not value:
                     raise PydanticCustomError(
-                        "invalid_structure",
-                        f"Invalid metadata: '{tag}'"
+                        "invalid_tag",
+                        f"Invalid metadata tag: '{tag}'"
                         )
 
                 if key in tags:
@@ -82,8 +82,8 @@ class Zone(BaseModel):
         return metadata
 
     @property
-    def type(self) -> str:
-        return self.metadata.type
+    def zone_type(self) -> str:
+        return self.metadata.zone
 
     @property
     def color(self) -> str:
@@ -130,7 +130,7 @@ class Connection(BaseModel):
             if key != "max_link_capacity":
                 raise PydanticCustomError(
                     "invalid_tag",
-                    f"Invalid tag: '{key}'. Expected '[max_link_capacity=...]'"
+                    f"Expected '[max_link_capacity=...]'"
                     )
 
             data[key] = value
@@ -251,6 +251,7 @@ class SyntaxParser:
         self._errors_list: list[SyntaxError] = []
         self._seen_keys: set[str] = set()
         self._seen_zones: set[str] = set()
+        self._seen_connections: set[frozenset] = set()
 
     def _validate_pair_structure(
                             self,
@@ -295,6 +296,7 @@ class SyntaxParser:
                             message=f"{key} must be declared only once"
                         )
                     )
+
                 else:
                     self._seen_keys.add(key)
 
@@ -325,24 +327,24 @@ class SyntaxParser:
 
             if nb_drones == 0:
                 self._errors_list.append(
-                            SyntaxError(
-                                index=index,
-                                input=f"nb_drones: {value}",
-                                type="nb_drones",
-                                message=("nb_drones must be "
-                                         "more than 0")
-                            )
+                    SyntaxError(
+                        index=index,
+                        input=f"nb_drones: {value}",
+                        type="nb_drones",
+                        message=("nb_drones must be "
+                                    "more than 0")
+                    )
                 )
 
             if is_first is not True:
                 self._errors_list.append(
-                            SyntaxError(
-                                index=index,
-                                input=f"nb_drones: {value}",
-                                type="line_placement",
-                                message=("nb_drones must be "
-                                         "declared in the first line")
-                            )
+                    SyntaxError(
+                        index=index,
+                        input=f"nb_drones: {value}",
+                        type="line_placement",
+                        message=("nb_drones must be "
+                                    "declared in the first line")
+                    )
                 )
 
         return nb_drones
@@ -359,10 +361,10 @@ class SyntaxParser:
         try:
             # data: name x y [metadata]
             data = Pattern.match_value(
-                            key=key,
-                            value=value,
-                            index=index
-                        )
+                        key=key,
+                        value=value,
+                        index=index
+                    )
 
         except SyntaxError as formatting_err:
             self._errors_list.append(formatting_err)
@@ -411,6 +413,7 @@ class SyntaxParser:
                         index: int
                     ) -> Connection | None:
 
+        err_list = self._errors_list
         key, value = pair["key"], pair["value"]
         connection = None
 
@@ -422,18 +425,18 @@ class SyntaxParser:
                             )
 
         except SyntaxError as formatting_err:
-            self._errors_list.append(formatting_err)
+            err_list.append(formatting_err)
 
         else:
             start, end = data["start"], data["end"]
             if start not in self._seen_zones or end not in self._seen_zones:
-                self._errors_list.append(
+                err_list.append(
                     SyntaxError(
                         index=index,
                         input=value,
                         type="undefined_zones",
                         message=("Connections must link"
-                                 " previously defined zones")
+                                " previously defined zones")
                     )
                 )
 
@@ -442,23 +445,19 @@ class SyntaxParser:
                     connection = Connection(**data)
 
                 except ValidationError as pydantic:
-                    # message = "Field validation errors:"
-                    # connector = "\n                     - "
-                    # for pydantic_err in pydantic.errors():
-                    #     loc = str(pydantic_err["loc"][0])
-                    #     msg = str(pydantic_err["msg"])
-                    #     tmp = " -> ".join([loc, msg])
-                    #     message = connector.join([message, tmp])
                     message = "Field validation errors for connection:"
                     connector = "\n                     - "
                     for pydantic_err in pydantic.errors():
                         type = str(pydantic_err["type"])
-                        loc = str(pydantic_err["loc"])
                         msg = str(pydantic_err["msg"])
-                        tmp = " -> ".join([type, loc, msg])
+                        if pydantic_err["loc"]:
+                            loc = str(pydantic_err["loc"])
+                            tmp = " -> ".join([type, loc, msg])
+                        else:
+                            tmp = " -> ".join([type, msg])
                         message = connector.join([message, tmp])
 
-                    self._errors_list.append(
+                    err_list.append(
                         SyntaxError(
                             index=index,
                             input=value,
@@ -466,6 +465,24 @@ class SyntaxParser:
                             message=f"{message}"
                         )
                     )
+
+                else:
+                    #Duplicates
+                    current = frozenset({connection.start, connection.end})
+
+                    if current in self._seen_connections:
+                        err_list.append(
+                            SyntaxError(
+                                index=index,
+                                input=value,
+                                type="duplicate_connection",
+                                message=("Connections must be unique, "
+                                        "a-b and b-a are considered duplicates")
+                            )
+                        )
+
+                    else:
+                        self._seen_connections.add(current)
 
         return connection
 
@@ -558,13 +575,13 @@ class MapData(BaseModel):
         end = self.end_zone
         print()
         print(f"start_zone = {start.name} {start.x} {start.y} {start.metadata}")
-        print(f"end_zone = {end.name} {end.x} {end.y} {end.type} {end.color} {end.max_drones}")
+        print(f"end_zone = {end.name} {end.x} {end.y} {end.zone_type} {end.color} {end.max_drones}")
         print()
         for z in self.zones:
-            print(f"zone = {z.name} {z.x} {z.y} {z.metadata}")
+            print(f"zone = {z.name} {z.x} {z.y} {z.zone_type} {z.color} {z.max_drones}")
         print()
         for c in self.connections:
-            print(c)
+            print(f"connection = {c}")
 
 
 class Parser(SyntaxParser):
